@@ -12,6 +12,8 @@ use anyhow::{Context, Result};
 pub struct CfgFile {
     pub path: PathBuf,
     lines: Vec<String>,
+    /// Whether the file uses Windows line endings (Windows builds write them), kept on save.
+    crlf: bool,
 }
 
 /// Splits one cfg line into tokens: quoted strings or whitespace-separated words. Stops at `//`
@@ -79,12 +81,13 @@ impl CfgFile {
     }
 
     pub fn parse(path: &Path, text: &str) -> Self {
-        Self { path: path.to_path_buf(), lines: text.lines().map(str::to_owned).collect() }
+        Self { path: path.to_path_buf(), lines: text.lines().map(str::to_owned).collect(), crlf: text.contains("\r\n") }
     }
 
     pub fn text(&self) -> String {
-        let mut s = self.lines.join("\n");
-        s.push('\n');
+        let eol = if self.crlf { "\r\n" } else { "\n" };
+        let mut s = self.lines.join(eol);
+        s.push_str(eol);
         s
     }
 
@@ -225,6 +228,14 @@ alias foo \"say hi; wait\"\n";
         assert!(c.text().ends_with("fps_max \"200\"\n"));
         assert!(c.text().contains("alias foo \"say hi; wait\""));
         assert!(c.cvars().iter().any(|(n, v)| n == "name" && v == "Player"));
+    }
+
+    #[test]
+    fn keeps_line_endings() {
+        let mut c = CfgFile::parse(Path::new("config.cfg"), "name \"a\"\r\nfps_max \"72\"\r\n");
+        c.set("name", "b");
+        assert_eq!(c.text(), "name \"b\"\r\nfps_max \"72\"\r\n");
+        assert_eq!(CfgFile::parse(Path::new("x.cfg"), "a 1\n").text(), "a 1\n");
     }
 
     #[test]

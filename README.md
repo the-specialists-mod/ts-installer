@@ -47,6 +47,18 @@ arguments, and Wine command / `WINEPREFIX` where relevant). Settings are saved i
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
 interrupted downloads resume.
 
+### Game configuration
+
+The **Game configuration** tab changes TS settings without starting the game: player name, mouse,
+video, audio, HUD and TS client options, and network rates, plus a filterable table of every cvar
+in `ts/config.cfg` and an editor for `ts/userconfig.cfg` (both engines run it after
+`config.cfg`, so it is the place for custom commands). It only offers what the installation's
+engine supports. On Xash3D FWGS the resolution and display mode go in `ts/video.cfg`; Steam
+Half-Life keeps those outside `config.cfg` (`hl.conf` or the registry), so they are left to the
+game. Changes are written on **Save**, each file keeping a `.bak`, and saving is off while the game
+runs because it rewrites `config.cfg` when it quits. If `config.cfg` doesn't exist yet, the new one
+starts as a copy of the file the game would otherwise load, so key bindings stay.
+
 ## Command line
 
 The same installer runs without the UI:
