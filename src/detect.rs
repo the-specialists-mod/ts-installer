@@ -61,10 +61,9 @@ pub fn default_xash_dir() -> PathBuf {
     }
 }
 
-/// A detected Half-Life install that already has TS in its `ts` folder, as an installation
-/// the launcher can use without running setup.
+/// The first detected Half-Life install that already has TS in its `ts` folder, as an
+/// installation the launcher can use without running setup.
 pub fn existing_ts_install(half_life: &[PathBuf]) -> Option<crate::install::Installation> {
-    let has_ts = |hl: &&PathBuf| hl.join("ts").join("liblist.gam").is_file() && hl.join("ts").join("dlls").is_dir();
-    let root = half_life.iter().find(has_ts)?;
+    let root = half_life.iter().find(|hl| crate::install::ts_libs(&hl.join("ts")).is_some())?;
     Some(crate::install::Installation { root: root.clone(), runtime: crate::install::Runtime::GoldSrc })
 }

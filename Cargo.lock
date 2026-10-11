@@ -7353,6 +7353,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "bzip2",
+ "chrono",
  "dirs 7.0.0",
  "dunce",
  "env_logger",

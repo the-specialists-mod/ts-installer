@@ -5,11 +5,12 @@ use std::process::{Child, Command};
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::LaunchOptions;
 use crate::install::{Installation, Runtime};
+use crate::store::LaunchOptions;
 
-/// The command that starts TS for `install` with `opts`.
-pub fn command(install: &Installation, opts: &LaunchOptions) -> Result<Command> {
+/// The command that starts TS for `install` with `opts`, followed by `extra` arguments (e.g.
+/// `+connect host:port`).
+pub fn command(install: &Installation, opts: &LaunchOptions, extra: &[String]) -> Result<Command> {
     let root = &install.root;
     let mut args: Vec<String> = vec!["-game".into(), "ts".into()];
     if opts.windowed {
@@ -19,6 +20,7 @@ pub fn command(install: &Installation, opts: &LaunchOptions) -> Result<Command> 
         args.push("-console".into());
     }
     args.extend(opts.extra_args.split_whitespace().map(str::to_owned));
+    args.extend(extra.iter().cloned());
 
     let mut cmd = match install.runtime {
         Runtime::Xash(build) => {
@@ -62,8 +64,13 @@ fn ensure_exists(exe: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn launch(install: &Installation, opts: &LaunchOptions) -> Result<Child> {
-    let mut cmd = command(install, opts)?;
+pub fn launch(install: &Installation, opts: &LaunchOptions, extra: &[String]) -> Result<Child> {
+    let mut cmd = command(install, opts, extra)?;
     log::info!("launching {cmd:?}");
     cmd.spawn().with_context(|| format!("start {:?}", cmd.get_program()))
+}
+
+/// `cmd` as one line for display.
+pub fn display(cmd: &Command) -> String {
+    std::iter::once(cmd.get_program()).chain(cmd.get_args()).map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
 }

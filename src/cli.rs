@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::Config;
-use crate::install::{Engine, GameLibs, Plan, PortSource, TsSource, ValveSource};
+use crate::install::{Engine, EngineSource, Existing, GameLibs, Plan, PortSource, TsSource, ValveSource};
 use crate::progress::{Event, Progress};
+use crate::store::Store;
 
 pub const USAGE: &str = "\
 usage:
@@ -16,23 +16,38 @@ usage:
                                     downloading it from xash3d-ts
       --ts PATH                     use a local ts-3-final.exe or ts folder instead of downloading
       --port DIR_OR_URL             use the Rust port libraries instead of the TS 3.0 originals
-  ts-launcher play                  start the installed game
-  ts-launcher print-command         show the command `play` would run";
+      --keep-engine | --keep-valve | --keep-ts
+                                    keep what the folder already has instead of installing it
+  ts-launcher list                  list the registered installations
+  ts-launcher play [ID]             start an installation (default: the last one used)
+  ts-launcher print-command [ID]    show the command `play` would run";
 
 /// Runs the command line in `args` (without the program name).
 pub fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("install") => install(&args[1..]),
-        Some("play") => {
-            let config = Config::load();
-            let inst = config.installation.as_ref().context("nothing installed yet")?;
-            crate::launch::launch(inst, &config.launch)?;
+        Some("list") => {
+            let store = Store::load();
+            for i in &store.instances {
+                let mark = if store.last_used.as_deref() == Some(i.id.as_str()) { "*" } else { " " };
+                println!("{mark} {}  {}  {}  {}", i.id, i.name, i.install.runtime.label(), i.install.root.display());
+            }
             Ok(())
         }
-        Some("print-command") => {
-            let config = Config::load();
-            let inst = config.installation.as_ref().context("nothing installed yet")?;
-            println!("{:?}", crate::launch::command(inst, &config.launch)?);
+        Some(cmd @ ("play" | "print-command")) => {
+            let mut store = Store::load();
+            let id = args.get(1).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
+            let inst = store.get(&id).with_context(|| format!("no installation {id}"))?.clone();
+            if cmd == "play" {
+                crate::launch::launch(&inst.install, &inst.launch, &[])?;
+                if let Some(i) = store.get_mut(&id) {
+                    i.last_played = Some(crate::store::now());
+                }
+                store.last_used = Some(id);
+                store.save()?;
+            } else {
+                println!("{}", crate::launch::display(&crate::launch::command(&inst.install, &inst.launch, &[])?));
+            }
             Ok(())
         }
         _ => bail!("{USAGE}"),
@@ -43,6 +58,7 @@ fn install(args: &[String]) -> Result<()> {
     let mut root = None;
     let mut engine = None;
     let mut valve = ValveSource::XashTs;
+    let mut keep_engine = false;
     let mut ts = TsSource::Download;
     let mut libs = GameLibs::Original;
     let mut it = args.iter();
@@ -54,6 +70,9 @@ fn install(args: &[String]) -> Result<()> {
             "--xash" => engine = Some(true),
             "--valve-from" => valve = ValveSource::CopyFrom(value()?.into()),
             "--ts" => ts = TsSource::Local(value()?.into()),
+            "--keep-ts" => ts = TsSource::Keep,
+            "--keep-valve" => valve = ValveSource::Keep,
+            "--keep-engine" => keep_engine = true,
             "--port" => {
                 let v = value()?;
                 libs = GameLibs::RustPort(if v.contains("://") { PortSource::Url(v) } else { PortSource::Dir(v.into()) });
@@ -61,11 +80,19 @@ fn install(args: &[String]) -> Result<()> {
             _ => bail!("unknown option {arg}\n{USAGE}"),
         }
     }
+    let root: PathBuf = root.context("--root is required")?;
     let engine = match engine.context("choose --half-life or --xash")? {
-        true => Engine::Xash { valve },
+        true => {
+            let engine = match (keep_engine, Existing::inspect(&root).xash) {
+                (true, Some(build)) => EngineSource::Keep(build),
+                (true, None) => bail!("{} has no Xash3D FWGS engine to keep", root.display()),
+                (false, _) => EngineSource::Download,
+            };
+            Engine::Xash { engine, valve }
+        }
         false => Engine::HalfLife,
     };
-    let plan = Plan { root: root.context("--root is required")?, engine, ts, libs };
+    let plan = Plan { root, engine, ts, libs };
 
     let last = std::sync::Mutex::new((0u64, std::time::Instant::now()));
     let progress = Progress::new(move |e| match e {
@@ -83,9 +110,9 @@ fn install(args: &[String]) -> Result<()> {
         }
     });
     let installation = plan.run(&progress)?;
-    let mut config = Config::load();
-    config.installation = Some(installation);
-    config.save()?;
-    eprintln!("installed; saved {}", Config::path().display());
+    let mut store = Store::load();
+    let id = store.add(installation);
+    store.save()?;
+    eprintln!("installed as {id}; saved {}", Store::path().display());
     Ok(())
 }

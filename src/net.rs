@@ -38,7 +38,7 @@ pub fn get_json(url: &str) -> Result<serde_json::Value> {
 
 /// Directory for downloaded archives, kept between runs so a failed install can resume cheaply.
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("ts-launcher")
+    crate::store::home().join("cache")
 }
 
 /// Downloads `url` to `dest` unless `dest` already exists (and matches `md5`, when given).

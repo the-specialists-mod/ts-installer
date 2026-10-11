@@ -9,6 +9,7 @@ repository = "https://github.com/the-specialists-mod/ts-installer"
 anyhow = "1.0.104"
 async-channel = "2.5.0"
 bzip2 = "0.6.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 dirs = "7.0.0"
 dunce = "1.0.5"
 env_logger = "0.11.11"

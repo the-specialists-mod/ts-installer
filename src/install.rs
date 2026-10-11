@@ -13,12 +13,22 @@ use crate::sources::{self, XashBuild};
 pub enum Engine {
     /// An existing Half-Life install: TS goes into its `ts` directory.
     HalfLife,
-    /// Xash3D FWGS, downloaded into the install directory with a `valve` directory beside it.
-    Xash { valve: ValveSource },
+    /// Xash3D FWGS in the install directory with a `valve` directory beside it.
+    Xash { engine: EngineSource, valve: ValveSource },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum EngineSource {
+    /// Download the Xash3D FWGS build the game libraries need.
+    Download,
+    /// Keep the engine already in the folder.
+    Keep(XashBuild),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ValveSource {
+    /// Keep the `valve` directory already in the folder.
+    Keep,
     /// The `valve` directory of the xash3d-ts release.
     XashTs,
     /// Copy `valve` from a local Half-Life install.
@@ -27,6 +37,8 @@ pub enum ValveSource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TsSource {
+    /// Keep the `ts` directory already in the folder.
+    Keep,
     /// `ts-3-final.exe` from this repository's release, or its Internet Archive mirror.
     Download,
     /// A local copy of the installer `.exe`, or a directory holding a `ts` game directory.
@@ -36,7 +48,8 @@ pub enum TsSource {
 /// Which game libraries (`client` and server DLLs) TS runs with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GameLibs {
-    /// The TS 3.0 originals: 32-bit Windows only, so Linux runs Windows Xash3D through Wine.
+    /// Whatever the TS files bring: the TS 3.0 originals are 32-bit Windows only, so Linux runs
+    /// Windows Xash3D through Wine.
     Original,
     /// The Rust port's native libraries, copied over `ts/`.
     RustPort(PortSource),
@@ -89,13 +102,90 @@ pub fn is_half_life_dir(dir: &Path) -> bool {
     dir.join("valve").join("liblist.gam").is_file()
 }
 
+/// Which game libraries a `ts` directory holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TsLibs {
+    Original,
+    RustPort,
+}
+
+impl TsLibs {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "TS 3.0 original",
+            Self::RustPort => "Rust port",
+        }
+    }
+}
+
+/// What an install folder already contains.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Existing {
+    pub valve: bool,
+    pub ts: Option<TsLibs>,
+    pub xash: Option<XashBuild>,
+}
+
+impl Existing {
+    pub fn inspect(root: &Path) -> Self {
+        if root.as_os_str().is_empty() {
+            return Self::default();
+        }
+        Self { valve: is_half_life_dir(root), ts: ts_libs(&root.join("ts")), xash: xash_build_in(root) }
+    }
+}
+
+/// The libraries in the game directory `ts`, or `None` when it isn't a TS install.
+pub fn ts_libs(ts: &Path) -> Option<TsLibs> {
+    if !ts.join("liblist.gam").is_file() || !ts.join("dlls").is_dir() {
+        return None;
+    }
+    let liblist = std::fs::read_to_string(ts.join("liblist.gam")).unwrap_or_default();
+    let port = liblist.contains("(Rust)") || ts.join("dlls/ts_amd64.so").is_file() || ts.join("dlls/ts_amd64.dll").is_file();
+    Some(if port { TsLibs::RustPort } else { TsLibs::Original })
+}
+
+/// The Xash3D FWGS build installed in `root`, judged by its files.
+pub fn xash_build_in(root: &Path) -> Option<XashBuild> {
+    if root.join("xash3d").is_file() && root.join("libxash.so").is_file() {
+        return Some(XashBuild::LinuxAmd64);
+    }
+    if !root.join("xash3d.exe").is_file() || !root.join("xash.dll").is_file() {
+        return None;
+    }
+    Some(match pe_machine(&root.join("xash.dll")) {
+        Some(0x8664) => XashBuild::WindowsAmd64,
+        _ => XashBuild::WindowsI386,
+    })
+}
+
+/// The COFF machine field of a PE file.
+fn pe_machine(path: &Path) -> Option<u16> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut b = [0u8; 4];
+    f.seek(SeekFrom::Start(0x3C)).ok()?;
+    f.read_exact(&mut b).ok()?;
+    f.seek(SeekFrom::Start(u32::from_le_bytes(b) as u64 + 4)).ok()?;
+    let mut m = [0u8; 2];
+    f.read_exact(&mut m).ok()?;
+    Some(u16::from_le_bytes(m))
+}
+
 impl Plan {
     /// The Xash3D build this plan installs, if any.
     pub fn xash_build(&self) -> Result<Option<XashBuild>> {
         match (&self.engine, &self.libs) {
             (Engine::HalfLife, _) => Ok(None),
-            (Engine::Xash { .. }, GameLibs::Original) => Ok(Some(XashBuild::WindowsI386)),
+            (Engine::Xash { engine: EngineSource::Keep(build), .. }, _) => Ok(Some(*build)),
             (Engine::Xash { .. }, GameLibs::RustPort(_)) => XashBuild::native().map(Some),
+            // Keeping a Rust port install needs the native engine, just like installing one.
+            (Engine::Xash { .. }, GameLibs::Original)
+                if self.ts == TsSource::Keep && ts_libs(&self.root.join("ts")) == Some(TsLibs::RustPort) =>
+            {
+                XashBuild::native().map(Some)
+            }
+            (Engine::Xash { .. }, GameLibs::Original) => Ok(Some(XashBuild::WindowsI386)),
         }
     }
 
@@ -126,13 +216,40 @@ impl Plan {
                 bail!("{} is not a Half-Life install (no valve/liblist.gam)", self.root.display())
             }
             Engine::Xash { .. } if empty(&self.root) => bail!("choose an install folder"),
-            Engine::Xash { valve: ValveSource::CopyFrom(hl) } if empty(hl) => bail!("choose the Half-Life folder to copy valve from"),
-            Engine::Xash { valve: ValveSource::CopyFrom(hl) } if !is_half_life_dir(hl) => {
+            Engine::Xash { valve: ValveSource::CopyFrom(hl), .. } if empty(hl) => bail!("choose the Half-Life folder to copy valve from"),
+            Engine::Xash { valve: ValveSource::CopyFrom(hl), .. } if !is_half_life_dir(hl) => {
                 bail!("{} is not a Half-Life install (no valve/liblist.gam)", hl.display())
             }
             _ => {}
         }
+        let existing = Existing::inspect(&self.root);
+        if let Engine::Xash { engine: EngineSource::Keep(_), .. } = self.engine
+            && existing.xash.is_none()
+        {
+            bail!("{} has no Xash3D FWGS engine to keep", self.root.display());
+        }
+        if let Engine::Xash { valve: ValveSource::Keep, .. } = self.engine
+            && !existing.valve
+        {
+            bail!("{} has no valve directory to keep", self.root.display());
+        }
+        // The original TS libraries are 32-bit Windows DLLs: a kept 64-bit or Linux engine can't load them.
+        let libs_after = match (&self.libs, &self.ts) {
+            (GameLibs::RustPort(_), _) => Some(TsLibs::RustPort),
+            (GameLibs::Original, TsSource::Keep) => existing.ts,
+            (GameLibs::Original, _) => Some(TsLibs::Original),
+        };
+        if let Engine::Xash { engine: EngineSource::Keep(build), .. } = self.engine
+            && libs_after == Some(TsLibs::Original)
+            && build != XashBuild::WindowsI386
+        {
+            bail!(
+                "the original TS 3.0 DLLs need the 32-bit Windows engine, but this folder has {}: download the engine instead",
+                build.label()
+            );
+        }
         match &self.ts {
+            TsSource::Keep if existing.ts.is_none() => bail!("{} has no ts directory to keep", self.root.display()),
             TsSource::Local(p) if empty(p) => bail!("choose the TS installer or a folder with a ts directory"),
             TsSource::Local(p) if !p.is_file() && sources::find_ts_dir(p).is_none() => {
                 bail!("{} is neither the TS installer nor a folder with a ts directory", p.display())
@@ -159,21 +276,22 @@ impl Plan {
     /// Titles of the steps [`Plan::run`] will take, in order.
     pub fn steps(&self) -> Vec<String> {
         let mut steps = Vec::new();
-        if let Ok(Some(build)) = self.xash_build() {
-            steps.push(format!("Install {}", build.label()));
-            steps.push(match &self.engine {
-                Engine::Xash { valve: ValveSource::XashTs } => "Install Half-Life data from xash3d-ts".into(),
-                Engine::Xash { valve: ValveSource::CopyFrom(p) } if p.as_os_str().is_empty() => {
-                    "Copy Half-Life data from a local install".into()
-                }
-                Engine::Xash { valve: ValveSource::CopyFrom(p) } => format!("Copy Half-Life data from {}", p.display()),
-                Engine::HalfLife => unreachable!(),
-            });
+        if let Engine::Xash { engine, valve } = &self.engine {
+            if let (EngineSource::Download, Ok(Some(build))) = (engine, self.xash_build()) {
+                steps.push(format!("Install {}", build.label()));
+            }
+            match valve {
+                ValveSource::Keep => {}
+                ValveSource::XashTs => steps.push("Install Half-Life data from xash3d-ts".into()),
+                ValveSource::CopyFrom(p) if p.as_os_str().is_empty() => steps.push("Copy Half-Life data from a local install".into()),
+                ValveSource::CopyFrom(p) => steps.push(format!("Copy Half-Life data from {}", p.display())),
+            }
         }
-        steps.push(match &self.ts {
-            TsSource::Download => "Download and install The Specialists 3.0".into(),
-            TsSource::Local(p) => format!("Install The Specialists 3.0 from {}", p.display()),
-        });
+        match &self.ts {
+            TsSource::Keep => {}
+            TsSource::Download => steps.push("Download and install The Specialists 3.0".into()),
+            TsSource::Local(p) => steps.push(format!("Install The Specialists 3.0 from {}", p.display())),
+        }
         if let GameLibs::RustPort(_) = self.libs {
             steps.push("Install the Rust port libraries".into());
         }
@@ -190,23 +308,35 @@ impl Plan {
             step += 1;
         };
 
-        if let (Some(build), Engine::Xash { valve }) = (self.xash_build()?, &self.engine) {
-            next(progress);
-            sources::install_fwgs(build, &self.root, progress)?;
-            next(progress);
+        if let Engine::Xash { engine, valve } = &self.engine {
+            if let (EngineSource::Download, Some(build)) = (engine, self.xash_build()?) {
+                next(progress);
+                sources::install_fwgs(build, &self.root, progress)?;
+            }
             match valve {
-                ValveSource::XashTs => sources::install_xash_ts_valve(&self.root, progress)?,
-                ValveSource::CopyFrom(hl) => sources::copy_valve(hl, &self.root, progress)?,
+                ValveSource::Keep => {}
+                ValveSource::XashTs => {
+                    next(progress);
+                    sources::install_xash_ts_valve(&self.root, progress)?
+                }
+                ValveSource::CopyFrom(hl) => {
+                    next(progress);
+                    sources::copy_valve(hl, &self.root, progress)?
+                }
             }
         }
 
-        next(progress);
         match &self.ts {
+            TsSource::Keep => {}
             TsSource::Download => {
+                next(progress);
                 let installer = sources::download_ts_installer(progress)?;
                 sources::install_ts_from_installer(&installer, &self.root, progress)?;
             }
-            TsSource::Local(p) => sources::install_ts_local(p, &self.root, progress)?,
+            TsSource::Local(p) => {
+                next(progress);
+                sources::install_ts_local(p, &self.root, progress)?
+            }
         }
 
         if let GameLibs::RustPort(src) = &self.libs {
@@ -222,6 +352,9 @@ impl Plan {
             progress.log(format!("{n} Rust port files copied from {}", port.display()));
         }
 
+        if titles.is_empty() {
+            progress.log("nothing to install: using the existing files");
+        }
         progress.log("install complete");
         Ok(Installation { root: self.root.clone(), runtime: self.runtime()? })
     }
@@ -237,17 +370,35 @@ mod tests {
 
     #[test]
     fn original_libs_use_32_bit_windows_xash() {
-        let p = plan(Engine::Xash { valve: ValveSource::XashTs }, GameLibs::Original);
+        let p = plan(Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs }, GameLibs::Original);
         assert_eq!(p.xash_build().unwrap(), Some(XashBuild::WindowsI386));
         assert_eq!(p.steps().len(), 3);
     }
 
     #[test]
     fn rust_port_uses_native_xash() {
-        let p = plan(Engine::Xash { valve: ValveSource::XashTs }, GameLibs::RustPort(PortSource::Url("https://x/y.zip".into())));
+        let p = plan(
+            Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs },
+            GameLibs::RustPort(PortSource::Url("https://x/y.zip".into())),
+        );
         assert_eq!(p.xash_build().unwrap(), XashBuild::native().ok());
         assert_eq!(p.port_platform().unwrap(), if cfg!(windows) { "windows-x86_64" } else { "linux-x86_64" });
         assert_eq!(p.steps().len(), 4);
+    }
+
+    #[test]
+    fn keeping_everything_has_no_steps() {
+        let mut p = plan(Engine::HalfLife, GameLibs::Original);
+        p.ts = TsSource::Keep;
+        assert!(p.steps().is_empty());
+        let p = Plan {
+            root: "/tmp/x".into(),
+            engine: Engine::Xash { engine: EngineSource::Keep(XashBuild::WindowsI386), valve: ValveSource::Keep },
+            ts: TsSource::Keep,
+            libs: GameLibs::Original,
+        };
+        assert!(p.steps().is_empty());
+        assert_eq!(p.runtime().unwrap(), Runtime::Xash(XashBuild::WindowsI386));
     }
 
     #[test]

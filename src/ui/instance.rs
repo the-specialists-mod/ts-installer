@@ -1,0 +1,387 @@
+//! One installation: its details and launch options, plus the server browser, player models,
+//! game configuration and controls tabs.
+
+use std::path::Path;
+
+use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+
+use ts_launcher::install::{Runtime, ts_libs};
+use ts_launcher::store::Instance;
+
+use super::controls::ControlsTab;
+use super::gameconfig::GameConfigTab;
+use super::models::ModelsTab;
+use super::servers::ServersTab;
+use super::{AppState, detail_row, human_bytes, human_time, section};
+
+pub enum InstanceEvent {
+    /// Show the installation selector.
+    Switch,
+    AddInstallation,
+    /// This installation was removed from the launcher.
+    Removed,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum TabKind {
+    Overview,
+    Servers,
+    Models,
+    Config,
+    Controls,
+}
+
+const TABS: [(TabKind, &str); 5] = [
+    (TabKind::Overview, "Overview"),
+    (TabKind::Servers, "Server browser"),
+    (TabKind::Models, "Player models"),
+    (TabKind::Config, "Game configuration"),
+    (TabKind::Controls, "Controls"),
+];
+
+/// Facts about the files on disk, read when the view opens.
+struct Details {
+    game: String,
+    version: String,
+    libs: String,
+    valve: bool,
+    maps: usize,
+    models: usize,
+}
+
+impl Details {
+    fn read(inst: &Instance) -> Self {
+        let ts = inst.ts_dir();
+        let liblist = std::fs::read_to_string(ts.join("liblist.gam")).unwrap_or_default();
+        let field = |key: &str| {
+            liblist
+                .lines()
+                .map(ts_launcher::cfgfile::tokenize)
+                .find(|t| t.len() >= 2 && t[0].eq_ignore_ascii_case(key))
+                .map(|t| t[1].clone())
+                .unwrap_or_default()
+        };
+        let count = |dir: &Path, f: &dyn Fn(&std::fs::DirEntry) -> bool| {
+            std::fs::read_dir(dir).map(|d| d.flatten().filter(|e| f(e)).count()).unwrap_or(0)
+        };
+        Self {
+            game: field("game"),
+            version: field("version"),
+            libs: ts_libs(&ts).map(|l| l.label().to_owned()).unwrap_or_else(|| "missing".into()),
+            valve: ts_launcher::install::is_half_life_dir(&inst.install.root),
+            maps: count(&ts.join("maps"), &|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("bsp"))),
+            models: count(&ts.join("models/player"), &|e| e.path().is_dir()),
+        }
+    }
+}
+
+pub struct InstanceView {
+    state: Entity<AppState>,
+    id: String,
+    tab: TabKind,
+    details: Details,
+    /// Size of the `ts` folder, computed in the background.
+    ts_size: Option<u64>,
+    status: Option<Result<String, String>>,
+    name: Entity<InputState>,
+    extra_args: Entity<InputState>,
+    wine: Entity<InputState>,
+    wine_prefix: Entity<InputState>,
+    servers: Option<Entity<ServersTab>>,
+    models: Option<Entity<ModelsTab>>,
+    config: Option<Entity<GameConfigTab>>,
+    controls: Option<Entity<ControlsTab>>,
+}
+
+impl EventEmitter<InstanceEvent> for InstanceView {}
+
+impl InstanceView {
+    pub fn new(state: Entity<AppState>, id: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let inst = state.read(cx).instance(&id).cloned().expect("instance exists");
+        let input = |value: &str, placeholder: &str, window: &mut Window, cx: &mut Context<Self>| {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.to_owned()).default_value(value.to_owned()));
+            cx.subscribe(&input, |this, _, e: &InputEvent, cx| {
+                if matches!(e, InputEvent::Change) {
+                    this.save_inputs(cx);
+                }
+            })
+            .detach();
+            input
+        };
+        let name = input(&inst.name, "Installation name", window, cx);
+        let extra_args = input(&inst.launch.extra_args, "e.g. +connect 1.2.3.4:27015 -dev 2", window, cx);
+        let wine = input(&inst.launch.wine, "wine", window, cx);
+        let wine_prefix = input(&inst.launch.wine_prefix, "default (~/.wine)", window, cx);
+
+        let ts = inst.ts_dir();
+        cx.spawn(async move |this, cx| {
+            let size = cx.background_executor().spawn(async move { dir_size(&ts) }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.ts_size = Some(size);
+                cx.notify();
+            });
+        })
+        .detach();
+
+        Self {
+            details: Details::read(&inst),
+            state,
+            id,
+            tab: TabKind::Overview,
+            ts_size: None,
+            status: None,
+            name,
+            extra_args,
+            wine,
+            wine_prefix,
+            servers: None,
+            models: None,
+            config: None,
+            controls: None,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn instance(&self, cx: &App) -> Option<Instance> {
+        self.state.read(cx).instance(&self.id).cloned()
+    }
+
+    fn update_instance(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Instance)) {
+        let id = self.id.clone();
+        let saved = self.state.update(cx, |state, cx| {
+            if let Some(inst) = state.store.get_mut(&id) {
+                f(inst);
+            }
+            cx.notify();
+            state.save()
+        });
+        if let Err(e) = saved {
+            self.status = Some(Err(e));
+        }
+        cx.notify();
+    }
+
+    fn save_inputs(&mut self, cx: &mut Context<Self>) {
+        let name = self.name.read(cx).value().trim().to_string();
+        let extra = self.extra_args.read(cx).value().to_string();
+        let wine = self.wine.read(cx).value().to_string();
+        let prefix = self.wine_prefix.read(cx).value().to_string();
+        self.update_instance(cx, |inst| {
+            if !name.is_empty() {
+                inst.name = name;
+            }
+            inst.launch.extra_args = extra;
+            inst.launch.wine = wine;
+            inst.launch.wine_prefix = prefix;
+        });
+    }
+
+    fn play(&mut self, cx: &mut Context<Self>) {
+        self.save_inputs(cx);
+        let id = self.id.clone();
+        self.status = Some(self.state.update(cx, |state, cx| {
+            cx.notify();
+            state.launch(&id, &[])
+        }));
+        cx.notify();
+    }
+
+    fn render_overview(&mut self, inst: &Instance, cx: &mut Context<Self>) -> AnyElement {
+        let d = &self.details;
+        let needs_wine = matches!(inst.install.runtime, Runtime::Xash(b) if b.needs_wine());
+        let launch = &inst.launch;
+        let command = ts_launcher::launch::command(&inst.install, launch, &[]).map(|c| ts_launcher::launch::display(&c));
+        let engine_extra = match inst.install.runtime {
+            Runtime::GoldSrc if cfg!(windows) => "hl.exe".to_owned(),
+            Runtime::GoldSrc => "started through Steam".to_owned(),
+            Runtime::Xash(b) => b.executable().to_owned(),
+        };
+        v_flex()
+            .id("overview-scroll")
+            .size_full()
+            .overflow_y_scrollbar()
+            .p_6()
+            .gap_4()
+            .child(
+                section("Installation", "", cx)
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Name"))
+                            .child(Input::new(&self.name).small()),
+                    )
+                    .child(detail_row("Folder", inst.install.root.display().to_string(), cx))
+                    .child(detail_row("Engine", format!("{} ({engine_extra})", inst.install.runtime.label()), cx))
+                    .child(detail_row("Game", if d.game.is_empty() { "—".to_owned() } else { format!("{} {}", d.game, d.version) }, cx))
+                    .child(detail_row("Game libraries", d.libs.clone(), cx))
+                    .child(detail_row("Half-Life data", if d.valve { "valve folder present" } else { "valve folder missing" }, cx))
+                    .child(detail_row("Content", format!("{} maps, {} player models", d.maps, d.models), cx))
+                    .child(detail_row("Size of ts", self.ts_size.map(human_bytes).unwrap_or_else(|| "measuring…".into()), cx))
+                    .child(detail_row("Added", if inst.created == 0 { "—".into() } else { human_time(inst.created) }, cx))
+                    .child(detail_row("Last played", inst.last_played.map(human_time).unwrap_or_else(|| "never".into()), cx)),
+            )
+            .child(
+                section("Launch options", "", cx)
+                    .child(
+                        h_flex()
+                            .gap_6()
+                            .child(Checkbox::new("windowed").label("Windowed").checked(launch.windowed).on_click(cx.listener(
+                                |this, checked: &bool, _, cx| {
+                                    let checked = *checked;
+                                    this.update_instance(cx, |i| i.launch.windowed = checked);
+                                },
+                            )))
+                            .child(Checkbox::new("console").label("Developer console").checked(launch.console).on_click(cx.listener(
+                                |this, checked: &bool, _, cx| {
+                                    let checked = *checked;
+                                    this.update_instance(cx, |i| i.launch.console = checked);
+                                },
+                            ))),
+                    )
+                    .child(div().text_sm().child("Extra arguments"))
+                    .child(Input::new(&self.extra_args))
+                    .when(needs_wine, |d| {
+                        d.child(div().text_sm().child("Wine command"))
+                            .child(Input::new(&self.wine))
+                            .child(div().text_sm().child("WINEPREFIX"))
+                            .child(Input::new(&self.wine_prefix))
+                    })
+                    .when_some(command.ok(), |d, c| {
+                        d.child(div().text_xs().font_family("monospace").text_color(cx.theme().muted_foreground).child(c))
+                    }),
+            )
+            .when_some(self.status.clone(), |d, s| {
+                d.child(match s {
+                    Ok(m) => Alert::success("play-status", m).into_any_element(),
+                    Err(e) => Alert::error("play-status", e).into_any_element(),
+                })
+            })
+            .child(
+                h_flex()
+                    .gap_3()
+                    .child(
+                        Button::new("play")
+                            .primary()
+                            .large()
+                            .icon(IconName::Play)
+                            .label("Play")
+                            .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
+                    )
+                    .child(Button::new("open-folder").outline().icon(IconName::FolderOpen).label("Open folder").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Some(inst) = this.instance(cx) {
+                                cx.open_with_system(&inst.install.root);
+                            }
+                        },
+                    )))
+                    .child(div().flex_1())
+                    .child(Button::new("forget").ghost().icon(IconName::Delete).label("Remove from launcher").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            let id = this.id.clone();
+                            let saved = this.state.update(cx, |state, cx| {
+                                state.store.remove(&id);
+                                cx.notify();
+                                state.save()
+                            });
+                            if let Err(e) = saved {
+                                this.status = Some(Err(e));
+                            }
+                            cx.emit(InstanceEvent::Removed);
+                        },
+                    ))),
+            )
+            .into_any_element()
+    }
+}
+
+impl Render for InstanceView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(inst) = self.instance(cx) else {
+            return div().into_any_element();
+        };
+        let selected = TABS.iter().position(|(k, _)| *k == self.tab).unwrap_or(0);
+        let (state, id) = (self.state.clone(), self.id.clone());
+        let body = match self.tab {
+            TabKind::Overview => self.render_overview(&inst, cx),
+            TabKind::Servers => {
+                self.servers.get_or_insert_with(|| cx.new(|cx| ServersTab::new(state, id, window, cx))).clone().into_any_element()
+            }
+            TabKind::Models => {
+                self.models.get_or_insert_with(|| cx.new(|cx| ModelsTab::new(state, id, window, cx))).clone().into_any_element()
+            }
+            TabKind::Config => {
+                self.config.get_or_insert_with(|| cx.new(|cx| GameConfigTab::new(state, id, window, cx))).clone().into_any_element()
+            }
+            TabKind::Controls => {
+                self.controls.get_or_insert_with(|| cx.new(|cx| ControlsTab::new(state, id, window, cx))).clone().into_any_element()
+            }
+        };
+        let several = self.state.read(cx).store.instances.len() > 1;
+        v_flex()
+            .size_full()
+            .child(
+                h_flex()
+                    .px_6()
+                    .pt_3()
+                    .gap_3()
+                    .child(div().text_lg().font_semibold().child(inst.name.clone()))
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(inst.install.runtime.label()))
+                    .child(div().flex_1())
+                    .when(several, |d| {
+                        d.child(
+                            Button::new("switch")
+                                .ghost()
+                                .small()
+                                .icon(Lucide::ArrowLeftRight)
+                                .label("Switch installation")
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(InstanceEvent::Switch))),
+                        )
+                    })
+                    .child(
+                        Button::new("add")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .label("Add installation…")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(InstanceEvent::AddInstallation))),
+                    ),
+            )
+            .child(
+                TabBar::new("instance-tabs")
+                    .underline()
+                    .px_6()
+                    .selected_index(selected)
+                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                        this.tab = TABS[*ix].0;
+                        cx.notify();
+                    }))
+                    .children(TABS.iter().map(|(_, label)| Tab::new().label(*label))),
+            )
+            .child(div().flex_1().min_h_0().child(body))
+            .into_any_element()
+    }
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
