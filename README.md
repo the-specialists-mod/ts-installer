@@ -47,6 +47,17 @@ arguments, and Wine command / `WINEPREFIX` where relevant). Settings are saved i
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
 interrupted downloads resume.
 
+### Controls
+
+The Controls tab edits the `bind` lines of `ts/config.cfg` without starting the game. Actions and
+their sections come from `ts/gfx/shell/kb_act.lst` (Half-Life's if TS has none). Click a key slot
+and press a key, mouse button or wheel. Esc cancels and Backspace/Delete clears the slot. A key
+already bound elsewhere moves to the new action. Changes are staged until Save, which keeps
+`config.cfg.bak`. Save is disabled while the game runs, because the game rewrites `config.cfg`
+when it quits. "Reset to defaults" uses `ts/gfx/shell/kb_def.lst` if present. Otherwise it uses
+the binds of the `config.cfg` that TS 3.0 ships, since TS has no `kb_def.lst`. GPUI doesn't tell
+keypad digits and arrows apart from the main keys, so those can't be captured as `kp_*` keys.
+
 ## Command line
 
 The same installer runs without the UI:

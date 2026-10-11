@@ -4,6 +4,7 @@ pub mod archive;
 pub mod cfgfile;
 pub mod cli;
 pub mod clickteam;
+pub mod controls;
 pub mod detect;
 pub mod install;
 pub mod launch;
