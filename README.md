@@ -79,6 +79,21 @@ game. Changes are written on **Save**, each file keeping a `.bak`, and saving is
 runs because it rewrites `config.cfg` when it quits. If `config.cfg` doesn't exist yet, the new one
 starts as a copy of the file the game would otherwise load, so key bindings stay.
 
+### Server browser and your own server
+
+The old GoldSrc/Xash master servers are gone, so the server browser combines
+[`servers.txt`](servers.txt) in this repository (downloaded at run time, so adding a line here
+lists a server for everyone; open a pull request), Xash3D FWGS's HTTP list, a LAN broadcast, your
+favorites and, with a Steam Web API key, Steam's master server. Every server is asked directly
+(A2S_INFO / A2S_PLAYER) for its name, map, players and ping.
+
+**Start a server** hosts a game on this computer: a listen server (the game hosts the map and you
+play on it) or, with the Linux FWGS build, a dedicated server. The launcher writes
+`ts/tslauncher_server.cfg` (and `ts/tslauncher_bots.cfg`), which TS execs once the map is
+running, so your `server.cfg` and `listenserver.cfg` are left alone. Bots (TS 3.0's
+`addcustombot`, or the Rust port's `ts_bot_quota` on a dedicated server) take their names from
+`ts/bots.txt`, which the form can edit (the old file is kept as `bots.txt.bak`).
+
 ## Command line
 
 The same installer runs without the UI:

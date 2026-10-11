@@ -1,0 +1,15 @@
+# The Specialists 3.0 servers shown in the launcher's server browser.
+#
+# The launcher downloads this file from
+# https://raw.githubusercontent.com/the-specialists-mod/ts-installer/main/servers.txt
+# so a change here reaches every player without a new release.
+#
+# Format (the same as Xash3D FWGS's server list): one server per line,
+#   gs <host>:<port>    a GoldSrc (Half-Life) server
+#   ip <host>:<port>    any other server, e.g. Xash3D FWGS
+# <host> is a name or an IPv4 address. Lines starting with # are comments.
+#
+# To add a server, open a pull request that adds its line, with a comment saying who runs it.
+
+# TSMOD.NET - Deathmatch (Moscow)
+gs srv.tsmod.net:27015
