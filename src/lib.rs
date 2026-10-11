@@ -6,6 +6,7 @@ pub mod cli;
 pub mod clickteam;
 pub mod controls;
 pub mod detect;
+pub mod gamecfg;
 pub mod install;
 pub mod launch;
 pub mod mdl;

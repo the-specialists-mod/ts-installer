@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 pub struct CfgFile {
     pub path: PathBuf,
     lines: Vec<String>,
-    /// The file used `\r\n` line endings (as shipped by TS); saving keeps them.
+    /// Whether the file uses Windows line endings (Windows builds write them), kept on save.
     crlf: bool,
 }
 
@@ -231,10 +231,11 @@ alias foo \"say hi; wait\"\n";
     }
 
     #[test]
-    fn keeps_crlf() {
-        let mut c = CfgFile::parse(Path::new("config.cfg"), "bind \"w\" \"+forward\"\r\nname \"a\"\r\n");
+    fn keeps_line_endings() {
+        let mut c = CfgFile::parse(Path::new("config.cfg"), "name \"a\"\r\nfps_max \"72\"\r\n");
         c.set("name", "b");
-        assert_eq!(c.text(), "bind \"w\" \"+forward\"\r\nname \"b\"\r\n");
+        assert_eq!(c.text(), "name \"b\"\r\nfps_max \"72\"\r\n");
+        assert_eq!(CfgFile::parse(Path::new("x.cfg"), "a 1\n").text(), "a 1\n");
     }
 
     #[test]
