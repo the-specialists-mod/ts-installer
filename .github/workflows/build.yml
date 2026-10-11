@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: ts-launcher-linux-x86_64
+            binary: target/release/ts-launcher
+          - os: windows-latest
+            artifact: ts-launcher-windows-x86_64
+            binary: target/release/ts-launcher.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libfontconfig-dev libfreetype-dev libvulkan-dev libzstd-dev libasound2-dev libssl-dev
+      - run: cargo test --release
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - run: |
+          mv ts-launcher-linux-x86_64/ts-launcher ts-launcher-linux-x86_64.bin
+          mv ts-launcher-windows-x86_64/ts-launcher.exe ts-launcher-windows-x86_64.exe
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ts-launcher-linux-x86_64.bin
+            ts-launcher-windows-x86_64.exe
