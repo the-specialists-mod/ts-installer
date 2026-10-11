@@ -1,0 +1,23 @@
+[package]
+name = "ts-launcher"
+version = "0.1.0"
+edition = "2024"
+description = "Installer and launcher for The Specialists 3.0 (Half-Life or Xash3D FWGS)"
+repository = "https://github.com/the-specialists-mod/ts-installer"
+
+[dependencies]
+anyhow = "1.0.104"
+async-channel = "2.5.0"
+bzip2 = "0.6.1"
+dirs = "7.0.0"
+env_logger = "0.11.11"
+flate2 = "1.1.10"
+gpui-kit = "0.7"
+log = "0.4.34"
+md-5 = "0.11.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+sevenz-rust2 = "0.24.0"
+tar = "0.4.46"
+ureq = { version = "3.4.2", features = ["json"] }
+zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
