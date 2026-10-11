@@ -8,6 +8,8 @@ pub mod controls;
 pub mod detect;
 pub mod install;
 pub mod launch;
+pub mod mdl;
+pub mod models;
 pub mod net;
 pub mod progress;
 pub mod sources;
