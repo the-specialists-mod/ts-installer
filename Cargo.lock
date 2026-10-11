@@ -7359,6 +7359,7 @@ dependencies = [
  "env_logger",
  "flate2",
  "gpui-kit",
+ "image",
  "log",
  "md-5 0.11.0",
  "serde",

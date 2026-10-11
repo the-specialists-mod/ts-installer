@@ -47,6 +47,15 @@ arguments, and Wine command / `WINEPREFIX` where relevant). Settings are saved i
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
 interrupted downloads resume.
 
+### Player models
+
+The Player models tab lists `ts/models/player/<name>/` with each model's preview picture and
+readme, and draws the selected `.mdl` in 3D (drag to turn; `src/mdl.rs` parses studio model v10
+and renders it in software). "Use" sets the engine's `model` cvar in `ts/config.cfg`, which is
+how TS picks your model. Team play servers (team deathmatch, The One) override it with the team's
+models. "Add model…" copies a folder with a `.mdl` (and its `.bmp` / `.txt`) into
+`models/player/<mdl name>/`.
+
 ## Command line
 
 The same installer runs without the UI:
