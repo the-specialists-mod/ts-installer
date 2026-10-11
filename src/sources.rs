@@ -18,9 +18,10 @@ pub const XASH_TS_ASSET: &str = "release.zip";
 /// Directory inside `release.zip` that holds the `valve` data.
 pub const XASH_TS_VALVE_PREFIX: &str = "xash/valve";
 
-pub const TS_MODDB_PAGE: &str = "https://www.moddb.com/mods/the-specialists/downloads/the-specialists-v30-client-windows";
-/// The same file on the Internet Archive, used when ModDB refuses the download (it sits behind
-/// a Cloudflare browser check).
+/// `ts-3-final.exe` as an asset of this repository's `ts-3.0` release. ModDB, the original
+/// source, sits behind a Cloudflare browser check that rejects scripted downloads.
+pub const TS_RELEASE_URL: &str = "https://github.com/the-specialists-mod/ts-installer/releases/download/ts-3.0/ts-3-final.exe";
+/// The same file on the Internet Archive, used when the release download fails.
 pub const TS_ARCHIVE_ORG: &str = "https://archive.org/download/ts-3.0/ts-3-final.exe";
 pub const TS_INSTALLER_NAME: &str = "ts-3-final.exe";
 pub const TS_INSTALLER_MD5: &str = "e0fe976a8d9d59393e66b9f1cb94c256";
@@ -121,44 +122,17 @@ pub fn copy_valve(half_life: &Path, root: &Path, progress: &Progress) -> Result<
     Ok(())
 }
 
-/// Downloads `ts-3-final.exe`, from ModDB when it lets us and otherwise from the Internet
+/// Downloads `ts-3-final.exe` from this repository's release, falling back to the Internet
 /// Archive, and returns its path. Both copies are checked against the known MD5.
 pub fn download_ts_installer(progress: &Progress) -> Result<PathBuf> {
     let dest = net::cache_dir().join(TS_INSTALLER_NAME);
-    match moddb_file_url(TS_MODDB_PAGE) {
-        Ok(url) => match net::download(&url, &dest, Some(TS_INSTALLER_MD5), progress) {
-            Ok(()) => return Ok(dest),
-            Err(e) => progress.log(format!("ModDB download failed ({e:#}), trying the Internet Archive")),
-        },
-        Err(e) => progress.log(format!("ModDB unavailable ({e:#}), using the Internet Archive mirror")),
+    match net::download(TS_RELEASE_URL, &dest, Some(TS_INSTALLER_MD5), progress) {
+        Ok(()) => return Ok(dest),
+        Err(e) => progress.log(format!("release download failed ({e:#}), using the Internet Archive mirror")),
     }
     progress.check_cancelled()?;
     net::download(TS_ARCHIVE_ORG, &dest, Some(TS_INSTALLER_MD5), progress)?;
     Ok(dest)
-}
-
-/// Resolves a ModDB download page to the file URL: page → `/downloads/start/<id>` →
-/// `/downloads/mirror/<id>/<n>/<hash>`, which redirects to the file.
-fn moddb_file_url(page: &str) -> Result<String> {
-    let html = net::get_text(page)?;
-    if html.contains("challenge-platform") {
-        bail!("Cloudflare browser check");
-    }
-    let start = find_href(&html, "/downloads/start/").context("no download link on the ModDB page")?;
-    let html = net::get_text(&absolute("https://www.moddb.com", &start))?;
-    let mirror = find_href(&html, "/downloads/mirror/").context("no mirror link on the ModDB start page")?;
-    Ok(absolute("https://www.moddb.com", &mirror))
-}
-
-fn find_href(html: &str, needle: &str) -> Option<String> {
-    let at = html.find(needle)?;
-    let start = html[..at].rfind(['"', '\''])? + 1;
-    let end = at + html[at..].find(['"', '\''])?;
-    Some(html[start..end].replace("&amp;", "&"))
-}
-
-fn absolute(base: &str, href: &str) -> String {
-    if href.starts_with("http") { href.to_owned() } else { format!("{base}{href}") }
 }
 
 /// Unpacks the TS installer into `root` (it holds `ts\...` paths).
@@ -228,18 +202,5 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finds_moddb_links() {
-        let html = r#"<a href="/downloads/start/123456" class="button">Download now</a>"#;
-        assert_eq!(find_href(html, "/downloads/start/").as_deref(), Some("/downloads/start/123456"));
-        let html = r#"<a href="/downloads/mirror/123456/131/abc?x=1&amp;y=2">here</a>"#;
-        assert_eq!(find_href(html, "/downloads/mirror/").as_deref(), Some("/downloads/mirror/123456/131/abc?x=1&y=2"));
     }
 }

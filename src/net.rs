@@ -10,7 +10,7 @@ use md5::{Digest, Md5};
 
 use crate::progress::Progress;
 
-/// A desktop browser user agent: ModDB rejects unknown clients outright.
+/// A desktop browser user agent: some mirrors reject unknown clients.
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
 
 pub fn agent() -> ureq::Agent {
@@ -21,15 +21,6 @@ pub fn agent() -> ureq::Agent {
         .http_status_as_error(false)
         .build()
         .into()
-}
-
-/// Fetches a page as text. Fails on non-2xx responses.
-pub fn get_text(url: &str) -> Result<String> {
-    let mut res = agent().get(url).header("Accept", "text/html,application/json").call().with_context(|| format!("GET {url}"))?;
-    let status = res.status();
-    let body = res.body_mut().with_config().limit(16 << 20).read_to_string().unwrap_or_default();
-    ensure!(status.is_success(), "GET {url}: HTTP {status}");
-    Ok(body)
 }
 
 /// Fetches JSON from the GitHub API.

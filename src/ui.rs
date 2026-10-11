@@ -474,41 +474,41 @@ impl Launcher {
                 })
         });
 
-        let ts = section("The Specialists 3.0", "", cx)
-            .child(
-                RadioGroup::vertical("ts-source")
-                    .selected_index(Some(self.ts_local as usize))
-                    .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                        this.ts_local = *ix == 1;
-                        cx.notify();
-                    }))
-                    .child(
-                        Radio::new("ts-download")
-                            .label("Download ts-3-final.exe from ModDB (155 MB; falls back to the Internet Archive mirror)"),
-                    )
-                    .child(Radio::new("ts-local").label("Use a local copy: the installer .exe, or a folder with a ts directory")),
-            )
-            .when(self.ts_local, |d| {
-                d.child(
-                    h_flex()
-                        .gap_2()
-                        .child(path_text(self.ts_path.as_deref(), "Nothing selected", cx))
-                        .child(
-                            Button::new("browse-ts-file")
-                                .outline()
-                                .icon(IconName::File)
-                                .label("Installer…")
-                                .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::TsLocal, false, cx))),
-                        )
-                        .child(
-                            Button::new("browse-ts-dir")
-                                .outline()
-                                .icon(IconName::FolderOpen)
-                                .label("Folder…")
-                                .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::TsLocal, true, cx))),
-                        ),
+        let ts =
+            section("The Specialists 3.0", "", cx)
+                .child(
+                    RadioGroup::vertical("ts-source")
+                        .selected_index(Some(self.ts_local as usize))
+                        .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                            this.ts_local = *ix == 1;
+                            cx.notify();
+                        }))
+                        .child(Radio::new("ts-download").label(
+                            "Download ts-3-final.exe (155 MB, from this project's GitHub release; falls back to the Internet Archive)",
+                        ))
+                        .child(Radio::new("ts-local").label("Use a local copy: the installer .exe, or a folder with a ts directory")),
                 )
-            });
+                .when(self.ts_local, |d| {
+                    d.child(
+                        h_flex()
+                            .gap_2()
+                            .child(path_text(self.ts_path.as_deref(), "Nothing selected", cx))
+                            .child(
+                                Button::new("browse-ts-file")
+                                    .outline()
+                                    .icon(IconName::File)
+                                    .label("Installer…")
+                                    .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::TsLocal, false, cx))),
+                            )
+                            .child(
+                                Button::new("browse-ts-dir")
+                                    .outline()
+                                    .icon(IconName::FolderOpen)
+                                    .label("Folder…")
+                                    .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::TsLocal, true, cx))),
+                            ),
+                    )
+                });
 
         let original_note = match (self.use_xash, cfg!(windows)) {
             (true, false) => "Runs the 32-bit Windows Xash3D FWGS through Wine (install wine first).",

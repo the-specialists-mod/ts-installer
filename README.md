@@ -14,13 +14,15 @@ On first start it asks how you want to play:
   downloaded from [xash3d-ts](https://github.com/The-Specialists-Archive/xash3d-ts) or copied
   from a local Half-Life install.
 
-TS itself comes from
-[ModDB](https://www.moddb.com/mods/the-specialists/downloads/the-specialists-v30-client-windows)
-(`ts-3-final.exe`), or from a local copy: the installer `.exe`, or a folder containing a `ts`
-directory. ModDB sits behind a Cloudflare browser check that usually rejects scripted downloads,
-so the launcher falls back to the identical file on the
+TS itself is `ts-3-final.exe`, the original client installer from
+[ModDB](https://www.moddb.com/mods/the-specialists/downloads/the-specialists-v30-client-windows).
+ModDB sits behind a Cloudflare browser check that rejects scripted downloads, so the launcher
+downloads the copy attached to this repository's
+[`ts-3.0` release](https://github.com/the-specialists-mod/ts-installer/releases/tag/ts-3.0)
+(it is too big to commit), falling back to the identical file on the
 [Internet Archive](https://archive.org/details/ts-3.0). Either way the download is checked
-against the known MD5 (`e0fe976a8d9d59393e66b9f1cb94c256`).
+against the known MD5 (`e0fe976a8d9d59393e66b9f1cb94c256`). A local copy works too: the
+installer `.exe`, or a folder containing a `ts` directory.
 
 The installer is a Clickteam Install Creator package. `src/clickteam.rs` unpacks it natively
 (format notes from [cicdec](https://github.com/Bioruebe/cicdec)), so nothing has to run under

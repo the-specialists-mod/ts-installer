@@ -27,7 +27,7 @@ pub enum ValveSource {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TsSource {
-    /// `ts-3-final.exe` from ModDB, or its Internet Archive mirror.
+    /// `ts-3-final.exe` from this repository's release, or its Internet Archive mirror.
     Download,
     /// A local copy of the installer `.exe`, or a directory holding a `ts` game directory.
     Local(PathBuf),
