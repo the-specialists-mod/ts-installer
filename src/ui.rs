@@ -81,8 +81,19 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let config = Config::load();
+        let mut config = Config::load();
         let detected = detect::half_life_installs();
+        // First start with TS already in a Half-Life install: skip setup and use it.
+        let mut status = None;
+        if config.installation.is_none()
+            && let Some(inst) = detect::existing_ts_install(&detected)
+        {
+            status = Some(Ok(format!("Found TS in {}", inst.root.display())));
+            config.installation = Some(inst);
+            if let Err(e) = config.save() {
+                status = Some(Err(format!("could not save settings: {e:#}")));
+            }
+        }
         let input = |value: &str, placeholder: &str, window: &mut Window, cx: &mut Context<Self>| {
             let state = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.to_owned()).default_value(value.to_owned()));
             cx.subscribe(&state, |this, _, e: &InputEvent, cx| {
@@ -127,7 +138,7 @@ impl Launcher {
             extra_args,
             wine,
             wine_prefix,
-            status: None,
+            status,
         }
     }
 

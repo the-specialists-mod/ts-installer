@@ -199,7 +199,7 @@ pub fn fetch_port_archive(url: &str, progress: &Progress) -> Result<PathBuf> {
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
+    match (dunce::canonicalize(a), dunce::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }

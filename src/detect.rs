@@ -42,7 +42,7 @@ pub fn half_life_installs() -> Vec<PathBuf> {
         for lib in library_folders(&steam) {
             let hl = lib.join("steamapps").join("common").join("Half-Life");
             if crate::install::is_half_life_dir(&hl) {
-                let canon = hl.canonicalize().unwrap_or(hl);
+                let canon = dunce::canonicalize(&hl).unwrap_or(hl);
                 if !found.contains(&canon) {
                     found.push(canon);
                 }
@@ -59,4 +59,12 @@ pub fn default_xash_dir() -> PathBuf {
     } else {
         dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("the-specialists")
     }
+}
+
+/// A detected Half-Life install that already has TS in its `ts` folder, as an installation
+/// the launcher can use without running setup.
+pub fn existing_ts_install(half_life: &[PathBuf]) -> Option<crate::install::Installation> {
+    let has_ts = |hl: &&PathBuf| hl.join("ts").join("liblist.gam").is_file() && hl.join("ts").join("dlls").is_dir();
+    let root = half_life.iter().find(has_ts)?;
+    Some(crate::install::Installation { root: root.clone(), runtime: crate::install::Runtime::GoldSrc })
 }

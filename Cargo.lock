@@ -7354,6 +7354,7 @@ dependencies = [
  "async-channel",
  "bzip2",
  "dirs 7.0.0",
+ "dunce",
  "env_logger",
  "flate2",
  "gpui-kit",
