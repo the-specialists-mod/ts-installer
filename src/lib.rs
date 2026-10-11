@@ -9,5 +9,7 @@ pub mod install;
 pub mod launch;
 pub mod net;
 pub mod progress;
+pub mod server_host;
+pub mod servers;
 pub mod sources;
 pub mod store;
