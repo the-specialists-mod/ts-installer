@@ -21,7 +21,7 @@ fn main() {
         gpui_kit::init(cx);
         ui::theme::init(cx);
         ts_launcher::update::clean_up();
-        let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
+        let bounds = Bounds::centered(None, size(px(1100.), px(760.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("The Specialists Launcher".into()), ..Default::default() }),

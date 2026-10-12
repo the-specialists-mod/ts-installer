@@ -490,125 +490,166 @@ impl InstanceView {
             .size_full()
             .overflow_y_scrollbar()
             .p_6()
-            .gap_4()
             .child(
-                section("Installation", "", cx)
+                h_flex()
+                    .items_start()
+                    .gap_4()
                     .child(
-                        h_flex()
-                            .gap_3()
-                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Name"))
-                            .child(Input::new(&self.name).small()),
-                    )
-                    .child(detail_row("Folder", inst.install.root.display().to_string(), cx))
-                    .child(detail_row("Engine", format!("{} ({engine_extra})", inst.install.runtime.label()), cx))
-                    .child(detail_row("Game", if d.game.is_empty() { "—".to_owned() } else { format!("{} {}", d.game, d.version) }, cx))
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Game libraries"))
-                            .child(
-                                div().w(px(260.)).child(
-                                    Select::new(&self.libs)
-                                        .id("game-libs")
-                                        .small()
-                                        .placeholder(d.libs.clone())
-                                        .disabled(self.switching.is_some()),
-                                ),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .child(
-                                div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Rust port version"),
-                            )
-                            .child(
-                                div()
-                                    .w(px(260.))
-                                    .child(Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some())),
-                            )
-                            .when(port_installed, |r| {
-                                r.child(
-                                    Button::new("validate-port")
-                                        .outline()
-                                        .small()
-                                        .icon(IconName::CircleCheck)
-                                        .label("Validate")
-                                        .disabled(self.switching.is_some())
-                                        .on_click(cx.listener(|this, _, _, cx| this.validate(cx))),
+                        div().flex_1().min_w_0().child(
+                            section("Installation", "", cx)
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .child(
+                                            div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Name"),
+                                        )
+                                        .child(Input::new(&self.name).small()),
                                 )
-                            })
-                            .when_some(self.repair.clone(), |r, tag| {
-                                r.child(
-                                    Button::new("repair-port")
-                                        .primary()
-                                        .small()
-                                        .label(format!("Reinstall {tag}"))
-                                        .disabled(self.switching.is_some())
-                                        .on_click(cx.listener(move |this, _, _, cx| this.install_version(Some(tag.clone()), true, cx))),
+                                .child(detail_row("Folder", inst.install.root.display().to_string(), cx))
+                                .child(detail_row("Engine", format!("{} ({engine_extra})", inst.install.runtime.label()), cx))
+                                .child(detail_row(
+                                    "Game",
+                                    if d.game.is_empty() { "—".to_owned() } else { format!("{} {}", d.game, d.version) },
+                                    cx,
+                                ))
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .w(px(140.))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Game libraries"),
+                                        )
+                                        .child(
+                                            div().w(px(260.)).child(
+                                                Select::new(&self.libs)
+                                                    .id("game-libs")
+                                                    .small()
+                                                    .placeholder(d.libs.clone())
+                                                    .disabled(self.switching.is_some()),
+                                            ),
+                                        ),
                                 )
-                            }),
-                    )
-                    .child(detail_row(
-                        "",
-                        match (port_installed, &installed) {
-                            (true, Some(m)) => format!("Installed: {} ({})", m.tag, m.asset),
-                            (true, None) => "Installed from a folder or URL, or by an older launcher: no release recorded".into(),
-                            (false, _) => "Used when you switch to the Rust port".into(),
-                        },
-                        cx,
-                    ))
-                    .when_some(self.switching.as_ref(), |el, s| {
-                        let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
-                        el.child(
-                            v_flex()
-                                .gap_1()
-                                .pl(px(152.))
-                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(s.title.clone()))
-                                .child(ProgressBar::new("switch-progress").loading(percent.is_none()).value(percent.unwrap_or(0.))),
-                        )
-                    })
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("TS 3.0 files"))
-                            .child(
-                                Button::new("validate-ts")
-                                    .outline()
-                                    .small()
-                                    .icon(IconName::CircleCheck)
-                                    .label("Validate")
-                                    .disabled(busy)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        let Some(inst) = this.instance(cx) else { return };
-                                        this.start_job("Validating the TS 3.0 files".into(), cx, move |p| {
-                                            Ok(JobDone::TsChecked(tsfiles::validate(&inst.install.root, p)?))
-                                        });
-                                    })),
-                            )
-                            .child(Button::new("repair-ts").outline().small().icon(IconName::Redo).label("Repair").disabled(busy).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    let Some(inst) = this.instance(cx) else { return };
-                                    this.start_job("Repairing the TS 3.0 files".into(), cx, move |p| {
-                                        Ok(JobDone::TsRepaired(tsfiles::repair(&inst.install.root, p)?))
-                                    });
-                                }),
-                            ))
-                            .child(
-                                Button::new("reset-ts")
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Undo)
-                                    .label("Reset to TS 3.0…")
-                                    .disabled(busy)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_reset = true;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .when(self.confirm_reset, |el| {
-                        el.child(
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .w(px(140.))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Rust port version"),
+                                        )
+                                        .child(div().w(px(260.)).child(
+                                            Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some()),
+                                        ))
+                                        .when(port_installed, |r| {
+                                            r.child(
+                                                Button::new("validate-port")
+                                                    .outline()
+                                                    .small()
+                                                    .icon(IconName::CircleCheck)
+                                                    .label("Validate")
+                                                    .disabled(self.switching.is_some())
+                                                    .on_click(cx.listener(|this, _, _, cx| this.validate(cx))),
+                                            )
+                                        })
+                                        .when_some(self.repair.clone(), |r, tag| {
+                                            r.child(
+                                                Button::new("repair-port")
+                                                    .primary()
+                                                    .small()
+                                                    .label(format!("Reinstall {tag}"))
+                                                    .disabled(self.switching.is_some())
+                                                    .on_click(
+                                                        cx.listener(move |this, _, _, cx| {
+                                                            this.install_version(Some(tag.clone()), true, cx)
+                                                        }),
+                                                    ),
+                                            )
+                                        }),
+                                )
+                                .child(detail_row(
+                                    "",
+                                    match (port_installed, &installed) {
+                                        (true, Some(m)) => format!("Installed: {} ({})", m.tag, m.asset),
+                                        (true, None) => {
+                                            "Installed from a folder or URL, or by an older launcher: no release recorded".into()
+                                        }
+                                        (false, _) => "Used when you switch to the Rust port".into(),
+                                    },
+                                    cx,
+                                ))
+                                .when_some(self.switching.as_ref(), |el, s| {
+                                    let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
+                                    el.child(
+                                        v_flex()
+                                            .gap_1()
+                                            .pl(px(152.))
+                                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(s.title.clone()))
+                                            .child(
+                                                ProgressBar::new("switch-progress").loading(percent.is_none()).value(percent.unwrap_or(0.)),
+                                            ),
+                                    )
+                                })
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .w(px(140.))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("TS 3.0 files"),
+                                        )
+                                        .child(
+                                            Button::new("validate-ts")
+                                                .outline()
+                                                .small()
+                                                .icon(IconName::CircleCheck)
+                                                .label("Validate")
+                                                .disabled(busy)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    let Some(inst) = this.instance(cx) else { return };
+                                                    this.start_job("Validating the TS 3.0 files".into(), cx, move |p| {
+                                                        Ok(JobDone::TsChecked(tsfiles::validate(&inst.install.root, p)?))
+                                                    });
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("repair-ts")
+                                                .outline()
+                                                .small()
+                                                .icon(IconName::Redo)
+                                                .label("Repair")
+                                                .disabled(busy)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    let Some(inst) = this.instance(cx) else { return };
+                                                    this.start_job("Repairing the TS 3.0 files".into(), cx, move |p| {
+                                                        Ok(JobDone::TsRepaired(tsfiles::repair(&inst.install.root, p)?))
+                                                    });
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("reset-ts")
+                                                .ghost()
+                                                .small()
+                                                .icon(IconName::Undo)
+                                                .label("Reset to TS 3.0…")
+                                                .disabled(busy)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.confirm_reset = true;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                                .when(self.confirm_reset, |el| {
+                                    el.child(
                             v_flex()
                                 .pl(px(152.))
                                 .gap_2()
@@ -638,106 +679,100 @@ impl InstanceView {
                                         ))),
                                 ),
                         )
-                    })
-                    .child(detail_row("Half-Life data", if d.valve { "valve folder present" } else { "valve folder missing" }, cx))
-                    .child(detail_row("Content", format!("{} maps, {} player models", d.maps, d.models), cx))
-                    .child(detail_row("Size of ts", self.ts_size.map(human_bytes).unwrap_or_else(|| "measuring…".into()), cx))
-                    .child(detail_row("Added", if inst.created == 0 { "—".into() } else { human_time(inst.created) }, cx))
-                    .child(detail_row("Last played", inst.last_played.map(human_time).unwrap_or_else(|| "never".into()), cx)),
-            )
-            .child(
-                section("Launch options", "", cx)
-                    .child(
-                        h_flex()
-                            .gap_6()
-                            .child(Checkbox::new("windowed").label("Windowed").checked(launch.windowed).on_click(cx.listener(
-                                |this, checked: &bool, _, cx| {
-                                    let checked = *checked;
-                                    this.update_instance(cx, |i| i.launch.windowed = checked);
-                                },
-                            )))
-                            .child(Checkbox::new("console").label("Developer console").checked(launch.console).on_click(cx.listener(
-                                |this, checked: &bool, _, cx| {
-                                    let checked = *checked;
-                                    this.update_instance(cx, |i| i.launch.console = checked);
-                                },
-                            )))
-                            .child(Checkbox::new("local-server").label("Start a local server").checked(launch.local_server).on_click(
-                                cx.listener(|this, checked: &bool, _, cx| {
-                                    let checked = *checked;
-                                    this.update_instance(cx, |i| i.launch.local_server = checked);
-                                }),
-                            )),
+                                })
+                                .child(detail_row(
+                                    "Half-Life data",
+                                    if d.valve { "valve folder present" } else { "valve folder missing" },
+                                    cx,
+                                ))
+                                .child(detail_row("Content", format!("{} maps, {} player models", d.maps, d.models), cx))
+                                .child(detail_row("Size of ts", self.ts_size.map(human_bytes).unwrap_or_else(|| "measuring…".into()), cx))
+                                .child(detail_row("Added", if inst.created == 0 { "—".into() } else { human_time(inst.created) }, cx))
+                                .child(detail_row("Last played", inst.last_played.map(human_time).unwrap_or_else(|| "never".into()), cx)),
+                        ),
                     )
-                    .when(launch.local_server, |d| {
-                        d.child(
-                            h_flex()
-                                .gap_3()
-                                .child(div().text_sm().child("Map"))
-                                .child(
-                                    div()
-                                        .w(px(240.))
-                                        .child(Select::new(&self.map).id("local-map").small().placeholder("No maps installed")),
-                                )
-                                .child(div().text_sm().child("Bots"))
-                                .child(div().w(px(110.)).child(NumberInput::new(&self.bots).small())),
-                        )
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
-                            "Play hosts this map with you in it and the bots joining a few seconds after it loads. \
+                    .child(
+                        v_flex()
+                            .w(px(360.))
+                            .flex_none()
+                            .gap_4()
+                            .child(
+                                Button::new("play")
+                                    .primary()
+                                    .large()
+                                    .w_full()
+                                    .icon(IconName::Play)
+                                    .label("Play")
+                                    .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
+                            )
+                            .when_some(self.status.clone(), |d, s| {
+                                d.child(match s {
+                                    Ok(m) => Alert::success("play-status", m).into_any_element(),
+                                    Err(e) => Alert::error("play-status", e).into_any_element(),
+                                })
+                            })
+                            .child(
+                                section("Launch options", "", cx)
+                                    .child(
+                                        v_flex()
+                                            .gap_2()
+                                            .child(Checkbox::new("windowed").label("Windowed").checked(launch.windowed).on_click(
+                                                cx.listener(|this, checked: &bool, _, cx| {
+                                                    let checked = *checked;
+                                                    this.update_instance(cx, |i| i.launch.windowed = checked);
+                                                }),
+                                            ))
+                                            .child(Checkbox::new("console").label("Developer console").checked(launch.console).on_click(
+                                                cx.listener(|this, checked: &bool, _, cx| {
+                                                    let checked = *checked;
+                                                    this.update_instance(cx, |i| i.launch.console = checked);
+                                                }),
+                                            ))
+                                            .child(
+                                                Checkbox::new("local-server")
+                                                    .label("Start a local server")
+                                                    .checked(launch.local_server)
+                                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                                        let checked = *checked;
+                                                        this.update_instance(cx, |i| i.launch.local_server = checked);
+                                                    })),
+                                            ),
+                                    )
+                                    .when(launch.local_server, |d| {
+                                        d.child(
+                                            h_flex().gap_3().child(div().w(px(40.)).text_sm().child("Map")).child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .child(Select::new(&self.map).id("local-map").small().placeholder("No maps installed")),
+                                            ),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_3()
+                                                .child(div().w(px(40.)).text_sm().child("Bots"))
+                                                .child(div().w(px(120.)).child(NumberInput::new(&self.bots).small())),
+                                        )
+                                        .child(
+                                            div().text_xs().text_color(cx.theme().muted_foreground).child(
+                                                "Play hosts this map with you in it and the bots joining a few seconds after it loads. \
                              Game mode, limits and bot skill come from Start a server in the server browser.",
-                        ))
-                    })
-                    .child(div().text_sm().child("Extra arguments"))
-                    .child(Input::new(&self.extra_args))
-                    .when(needs_wine, |d| {
-                        d.child(div().text_sm().child("Wine command"))
-                            .child(Input::new(&self.wine))
-                            .child(div().text_sm().child("WINEPREFIX"))
-                            .child(Input::new(&self.wine_prefix))
-                    })
-                    .when_some(command.ok(), |d, c| {
-                        d.child(div().text_xs().font_family("monospace").text_color(cx.theme().muted_foreground).child(c))
-                    }),
-            )
-            .when_some(self.status.clone(), |d, s| {
-                d.child(match s {
-                    Ok(m) => Alert::success("play-status", m).into_any_element(),
-                    Err(e) => Alert::error("play-status", e).into_any_element(),
-                })
-            })
-            .child(
-                h_flex()
-                    .gap_3()
-                    .child(
-                        Button::new("play")
-                            .primary()
-                            .large()
-                            .icon(IconName::Play)
-                            .label("Play")
-                            .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
-                    )
-                    .child(Button::new("open-folder").outline().icon(IconName::FolderOpen).label("Open folder").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Some(inst) = this.instance(cx) {
-                                cx.open_with_system(&inst.install.root);
-                            }
-                        },
-                    )))
-                    .child(div().flex_1())
-                    .child(Button::new("forget").ghost().icon(IconName::Delete).label("Remove from launcher").on_click(cx.listener(
-                        |this, _, _, cx| {
-                            let id = this.id.clone();
-                            let saved = this.state.update(cx, |state, cx| {
-                                state.store.remove(&id);
-                                cx.notify();
-                                state.save()
-                            });
-                            if let Err(e) = saved {
-                                this.status = Some(Err(e));
-                            }
-                            cx.emit(InstanceEvent::Removed);
-                        },
-                    ))),
+                                            ),
+                                        )
+                                    })
+                                    .child(div().text_sm().child("Extra arguments"))
+                                    .child(Input::new(&self.extra_args))
+                                    .when(needs_wine, |d| {
+                                        d.child(div().text_sm().child("Wine command"))
+                                            .child(Input::new(&self.wine))
+                                            .child(div().text_sm().child("WINEPREFIX"))
+                                            .child(Input::new(&self.wine_prefix))
+                                    })
+                                    .when_some(command.ok(), |d, c| {
+                                        d.child(div().text_xs().font_family("monospace").text_color(cx.theme().muted_foreground).child(c))
+                                    }),
+                            ),
+                    ),
             )
             .into_any_element()
     }
@@ -801,20 +836,39 @@ impl Render for InstanceView {
                         d.child(
                             Button::new("switch")
                                 .ghost()
-                                .small()
                                 .icon(Lucide::ArrowLeftRight)
-                                .label("Switch installation")
+                                .tooltip("Switch installation")
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(InstanceEvent::Switch))),
                         )
                     })
                     .child(
                         Button::new("add")
                             .ghost()
-                            .small()
                             .icon(IconName::Plus)
-                            .label("Add installation…")
+                            .tooltip("Add installation")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(InstanceEvent::AddInstallation))),
-                    ),
+                    )
+                    .child(Button::new("open-folder").ghost().icon(IconName::FolderOpen).tooltip("Open folder").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            if let Some(inst) = this.instance(cx) {
+                                cx.open_with_system(&inst.install.root);
+                            }
+                        },
+                    )))
+                    .child(Button::new("forget").ghost().icon(IconName::Delete).tooltip("Remove from launcher (the files stay)").on_click(
+                        cx.listener(|this, _, _, cx| {
+                            let id = this.id.clone();
+                            let saved = this.state.update(cx, |state, cx| {
+                                state.store.remove(&id);
+                                cx.notify();
+                                state.save()
+                            });
+                            if let Err(e) = saved {
+                                this.status = Some(Err(e));
+                            }
+                            cx.emit(InstanceEvent::Removed);
+                        }),
+                    )),
             )
             .child(metal_bar(selected, cx))
             .child(div().flex_1().min_h_0().child(body))
