@@ -3,6 +3,55 @@
 An installer and launcher for **The Specialists 3.0**, built with [GPUI](https://gpui.rs) and
 [gpui-component](https://github.com/longbridge/gpui-component). Runs on Windows and Linux.
 
+**Download:** [latest release](https://github.com/the-specialists-mod/tsmod-launcher/releases/latest)
+(`ts-launcher-<version>-windows-x86_64.exe`, or `ts-launcher-<version>-linux-x86_64.bin`, which
+needs `chmod +x` first). It updates itself from then on.
+
+![Server browser](docs/screenshots/servers.webp)
+
+## Features
+
+- **Installs TS 3.0** into your Half-Life install, or with the free
+  [Xash3D FWGS](https://github.com/FWGS/xash3d-fwgs) engine, so you don't need Half-Life. The
+  original `ts-3-final.exe` is downloaded, checked against its MD5 and unpacked natively.
+- **The original DLLs or the [Rust port](https://github.com/the-specialists-mod/the-specialistsmod-rs)**:
+  switch between them, and between port releases, at any time.
+- **Several installations**, each with its own launch options, picked from a list.
+- **Validate, repair and reset**: checks every TS file against the release, puts damaged files
+  back, or returns the install to a clean TS 3.0.
+- **Server browser** with servers from Steam's master server (through the Steam client when it
+  runs), the launcher's [`servers.txt`](servers.txt), your LAN and your favorites. It shows players
+  and ping, and joins with a double-click.
+- **Joins Steam servers from Xash3D FWGS**: the launcher runs a Steam broker next to the engine,
+  so GoldSrc servers that check Steam accept it.
+- **Start a server**: a listen server, or a dedicated server on Linux, with bots, game mode, limits
+  and TS options.
+- **Player models**: previews, a 3D view you can turn, and a one-click switch. Adds new models.
+- **Game configuration**: name, mouse, video, audio, HUD, network and every other cvar, without
+  starting the game.
+- **Controls**: rebind keys and mouse buttons, with conflicts resolved for you.
+- **Download cache**: everything downloaded is kept and reused, so repairs and reinstalls work
+  offline.
+- **Updates itself** from this repository's releases.
+- **Command line**: `ts-launcher install`, `play`, `validate`, `repair` and `reset` work without the UI.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![How do you want to play?](docs/screenshots/welcome.webp) | ![Setting up Xash3D FWGS](docs/screenshots/setup.webp) |
+| First start: Half-Life or Xash3D FWGS | Setup: where things come from |
+| ![Installing](docs/screenshots/installing.webp) | ![Choose an installation](docs/screenshots/select.webp) |
+| Installing | Several installations |
+| ![Overview](docs/screenshots/overview.webp) | ![Server browser](docs/screenshots/servers.webp) |
+| Overview: game libraries, validation, launch options | Server browser |
+| ![Start a server](docs/screenshots/host.webp) | ![Player models](docs/screenshots/models.webp) |
+| Start a server | Player models |
+| ![Game configuration](docs/screenshots/gameconfig.webp) | ![Controls](docs/screenshots/controls.webp) |
+| Game configuration | Controls |
+| ![Download cache](docs/screenshots/cache.webp) | |
+| Download cache | |
+
 ## What it does
 
 On first start it asks how you want to play:
