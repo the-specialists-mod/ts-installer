@@ -11,8 +11,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -24,7 +23,7 @@ use super::controls::ControlsTab;
 use super::gameconfig::GameConfigTab;
 use super::models::ModelsTab;
 use super::servers::ServersTab;
-use super::{AppState, detail_row, human_bytes, human_time, section};
+use super::{AppState, detail_row, human_bytes, human_time, section, theme};
 
 pub enum InstanceEvent {
     /// Show the installation selector.
@@ -463,7 +462,7 @@ impl Render for InstanceView {
                     .px_6()
                     .pt_3()
                     .gap_3()
-                    .child(div().text_lg().font_semibold().child(inst.name.clone()))
+                    .child(super::theme::heading(&inst.name, 22.))
                     .child(div().text_sm().text_color(cx.theme().muted_foreground).child(inst.install.runtime.label()))
                     .child(div().flex_1())
                     .when(several, |d| {
@@ -485,20 +484,42 @@ impl Render for InstanceView {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(InstanceEvent::AddInstallation))),
                     ),
             )
-            .child(
-                TabBar::new("instance-tabs")
-                    .underline()
-                    .px_6()
-                    .selected_index(selected)
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab = TABS[*ix].0;
-                        cx.notify();
-                    }))
-                    .children(TABS.iter().map(|(_, label)| Tab::new().label(*label))),
-            )
+            .child(metal_bar(selected, cx))
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }
+}
+
+/// The tabs as the site's nav bar: stencilled labels on brushed metal, the selected one lit.
+fn metal_bar(selected: usize, cx: &mut Context<InstanceView>) -> impl IntoElement {
+    div()
+        .relative()
+        .mt_3()
+        .h(px(41.))
+        .border_y_1()
+        .border_color(cx.theme().border)
+        .child(img(theme::METAL_BAR.clone()).absolute().size_full().object_fit(ObjectFit::Fill))
+        .child(h_flex().relative().size_full().px_4().justify_center().children(TABS.iter().enumerate().map(|(ix, (kind, label))| {
+            let lit = ix == selected;
+            let kind = *kind;
+            div()
+                .id(ix)
+                .h_full()
+                .px_3()
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .font_family(theme::DISPLAY_FONT)
+                .text_size(px(19.))
+                .text_color(if lit { theme::stencil_lit() } else { theme::stencil() })
+                .when(lit, |d| d.bg(hsla(0., 0., 0., 0.55)))
+                .hover(|s| s.text_color(theme::stencil_lit()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tab = kind;
+                    cx.notify();
+                }))
+                .child(label.to_uppercase())
+        })))
 }
 
 fn dir_size(dir: &Path) -> u64 {

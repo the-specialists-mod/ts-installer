@@ -7,11 +7,12 @@ mod models;
 mod select;
 mod servers;
 mod setup;
+pub mod theme;
 
 use std::path::Path;
 use std::process::Child;
 
-use gpui_kit::component::{ActiveTheme, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -155,21 +156,31 @@ impl Render for Launcher {
             Screen::Select => self.render_select(cx).into_any_element(),
             Screen::Instance(id) => self.instance_view(&id, window, cx).into_any_element(),
         };
-        v_flex()
+        // The site's darkened grunge texture behind everything.
+        div()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            .child(img(theme::GRUNGE.clone()).absolute().size_full().object_fit(ObjectFit::Cover))
+            .child(div().absolute().size_full().bg(hsla(0., 0., 0., 0.5)))
             .child(
-                h_flex()
-                    .px_6()
-                    .py_4()
-                    .gap_3()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(div().text_xl().font_bold().child("The Specialists 3.0"))
-                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Launcher")),
+                v_flex()
+                    .relative()
+                    .size_full()
+                    .child(
+                        h_flex()
+                            .px_6()
+                            .py_2()
+                            .gap_4()
+                            .bg(hsla(0., 0., 0., 0.35))
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(img(theme::LOGO.clone()).w(px(267.)).h(px(52.)))
+                            .child(theme::heading("3.0 Launcher", 22.).text_color(cx.theme().muted_foreground)),
+                    )
+                    .child(div().flex_1().min_h_0().child(body)),
             )
-            .child(div().flex_1().min_h_0().child(body))
     }
 }
 
@@ -181,7 +192,8 @@ pub fn section(title: &str, note: &str, cx: &App) -> Div {
         .rounded(cx.theme().radius)
         .border_1()
         .border_color(cx.theme().border)
-        .child(div().font_semibold().child(title.to_owned()))
+        .bg(theme::panel())
+        .child(theme::heading(title, 18.))
         .when(!note.is_empty(), |d| d.child(div().text_sm().text_color(cx.theme().muted_foreground).child(note.to_owned())))
 }
 

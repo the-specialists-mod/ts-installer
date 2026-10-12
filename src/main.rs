@@ -2,7 +2,6 @@
 
 mod ui;
 
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 fn main() {
@@ -20,7 +19,7 @@ fn main() {
 
     gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(|cx| {
         gpui_kit::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
+        ui::theme::init(cx);
         let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

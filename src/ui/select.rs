@@ -35,7 +35,7 @@ impl Launcher {
                     .rounded(cx.theme().radius_lg)
                     .border_1()
                     .border_color(if last.as_deref() == Some(inst.id.as_str()) { cx.theme().primary } else { cx.theme().border })
-                    .bg(cx.theme().secondary)
+                    .bg(super::theme::panel())
                     .cursor_pointer()
                     .hover(|s| s.border_color(cx.theme().primary))
                     .on_click(cx.listener({
@@ -99,7 +99,7 @@ impl Launcher {
             .overflow_y_scrollbar()
             .p_8()
             .gap_4()
-            .child(div().text_2xl().font_bold().child("Choose an installation"))
+            .child(super::theme::heading("Choose an installation", 30.))
             .when_some(self.notice.clone(), |d, n| {
                 d.child(match n {
                     Ok(m) => Alert::success("select-notice", m).into_any_element(),

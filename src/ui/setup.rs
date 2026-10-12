@@ -12,7 +12,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -311,7 +311,7 @@ impl Launcher {
                 .rounded(cx.theme().radius_lg)
                 .border_1()
                 .border_color(cx.theme().border)
-                .bg(cx.theme().secondary)
+                .bg(super::theme::panel())
                 .cursor_pointer()
                 .hover(|s| s.border_color(cx.theme().primary))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -320,7 +320,7 @@ impl Launcher {
                     this.show(Screen::Setup, cx);
                 }))
                 .child(div().text_color(cx.theme().primary).child(Icon::new(icon).large()))
-                .child(div().text_lg().font_semibold().child(title.to_owned()))
+                .child(super::theme::heading(title, 20.))
                 .child(div().text_sm().text_color(cx.theme().muted_foreground).child(text.to_owned()))
         };
         let has_installs = !self.state.read(cx).store.instances.is_empty();
@@ -328,7 +328,7 @@ impl Launcher {
             .size_full()
             .p_8()
             .gap_6()
-            .child(div().text_2xl().font_bold().child("How do you want to play?"))
+            .child(super::theme::heading("How do you want to play?", 30.))
             .child(
                 h_flex()
                     .gap_4()
