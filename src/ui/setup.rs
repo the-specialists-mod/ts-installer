@@ -15,9 +15,9 @@ use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_fle
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use ts_launcher::detect;
 use ts_launcher::install::{Engine, EngineSource, Existing, GameLibs, Installation, Plan, PortSource, TsLibs, TsSource, ValveSource};
 use ts_launcher::progress::{Event, Progress};
+use ts_launcher::{detect, sources};
 
 use super::{Launcher, Screen, human_bytes, path_text, section};
 
@@ -38,6 +38,13 @@ enum ValveChoice {
     Keep,
     Download,
     Copy,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PortChoice {
+    Release,
+    Dir,
+    Url,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -66,7 +73,7 @@ pub struct Setup {
     ts: TsChoice,
     ts_path: Option<PathBuf>,
     rust_port: bool,
-    port_from_url: bool,
+    port_source: PortChoice,
     port_dir: Option<PathBuf>,
     port_url: Entity<InputState>,
 
@@ -99,7 +106,7 @@ impl Setup {
             ts: TsChoice::Download,
             ts_path: None,
             rust_port: false,
-            port_from_url: false,
+            port_source: PortChoice::Release,
             port_dir: None,
             port_url,
             steps: Vec::new(),
@@ -170,10 +177,11 @@ impl Setup {
             TsChoice::Download => TsSource::Download,
             TsChoice::Local => TsSource::Local(self.ts_path.clone().unwrap_or_default()),
         };
-        let libs = match (self.rust_port, self.port_from_url) {
+        let libs = match (self.rust_port, self.port_source) {
             (false, _) => GameLibs::Original,
-            (true, true) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
-            (true, false) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
+            (true, PortChoice::Release) => GameLibs::RustPort(PortSource::Release),
+            (true, PortChoice::Url) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
+            (true, PortChoice::Dir) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
         };
         Plan { root: self.root(), engine, ts, libs }
     }
@@ -539,7 +547,7 @@ impl Launcher {
                         cx.notify();
                     }))
                     .child(Radio::new("libs-original").label(original_label))
-                    .child(Radio::new("libs-port").label("Install the Rust port libraries (native; from its dist/ folder or an archive)")),
+                    .child(Radio::new("libs-port").label("Install the Rust port libraries (native)")),
             )
             .when(!s.rust_port && !original_note.is_empty(), |d| {
                 d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
@@ -547,24 +555,33 @@ impl Launcher {
             .when(s.rust_port, |d| {
                 d.child(
                     RadioGroup::horizontal("port-source")
-                        .selected_index(Some(s.port_from_url as usize))
+                        .selected_index(Some(s.port_source as usize))
                         .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                            this.setup.port_from_url = *ix == 1;
+                            this.setup.port_source = [PortChoice::Release, PortChoice::Dir, PortChoice::Url][*ix];
                             cx.notify();
                         }))
+                        .child(Radio::new("port-release").label("Latest release"))
                         .child(Radio::new("port-dir").label("Local folder"))
                         .child(Radio::new("port-url").label("Download URL (.zip / .tar.gz)")),
                 )
-                .child(if s.port_from_url {
-                    h_flex().child(Input::new(&s.port_url))
-                } else {
-                    h_flex().gap_2().child(path_text(s.port_dir.as_deref(), "No folder selected", cx)).child(
-                        Button::new("browse-port")
-                            .outline()
-                            .icon(IconName::FolderOpen)
-                            .label("Browse…")
-                            .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::PortDir, true, cx))),
-                    )
+                .child(match s.port_source {
+                    PortChoice::Release => div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("Downloaded from github.com/{}", sources::PORT_REPO))
+                        .into_any_element(),
+                    PortChoice::Url => h_flex().child(Input::new(&s.port_url)).into_any_element(),
+                    PortChoice::Dir => h_flex()
+                        .gap_2()
+                        .child(path_text(s.port_dir.as_deref(), "No folder selected", cx))
+                        .child(
+                            Button::new("browse-port")
+                                .outline()
+                                .icon(IconName::FolderOpen)
+                                .label("Browse…")
+                                .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::PortDir, true, cx))),
+                        )
+                        .into_any_element(),
                 })
             });
 

@@ -57,6 +57,8 @@ pub enum GameLibs {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PortSource {
+    /// The latest release of the port's repository.
+    Release,
     /// A local directory: the port's `dist/`, one platform's `ts/`, or a game directory.
     Dir(PathBuf),
     /// A `.zip` or `.tar.gz` with the same layout.
@@ -293,7 +295,10 @@ impl Plan {
             TsSource::Local(p) => steps.push(format!("Install The Specialists 3.0 from {}", p.display())),
         }
         if let GameLibs::RustPort(_) = self.libs {
-            steps.push("Install the Rust port libraries".into());
+            steps.push(match self.libs {
+                GameLibs::RustPort(PortSource::Release) => "Download and install the latest Rust port release".into(),
+                _ => "Install the Rust port libraries".into(),
+            });
         }
         steps
     }
@@ -343,6 +348,7 @@ impl Plan {
             next(progress);
             let platform = self.port_platform()?;
             let dir = match src {
+                PortSource::Release => sources::fetch_port_release(platform, progress)?,
                 PortSource::Dir(d) => d.clone(),
                 PortSource::Url(u) => sources::fetch_port_archive(u, progress)?,
             };

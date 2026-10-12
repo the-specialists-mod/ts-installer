@@ -15,7 +15,8 @@ usage:
       --valve-from HL_DIR           (xash) copy valve from a Half-Life install instead of
                                     downloading it from xash3d-ts
       --ts PATH                     use a local ts-3-final.exe or ts folder instead of downloading
-      --port DIR_OR_URL             use the Rust port libraries instead of the TS 3.0 originals
+      --port [DIR_OR_URL]           use the Rust port libraries instead of the TS 3.0 originals:
+                                    its latest release unless a dist/ folder or archive URL is given
       --keep-engine | --keep-valve | --keep-ts
                                     keep what the folder already has instead of installing it
   ts-launcher list                  list the registered installations
@@ -74,8 +75,14 @@ fn install(args: &[String]) -> Result<()> {
             "--keep-valve" => valve = ValveSource::Keep,
             "--keep-engine" => keep_engine = true,
             "--port" => {
-                let v = value()?;
-                libs = GameLibs::RustPort(if v.contains("://") { PortSource::Url(v) } else { PortSource::Dir(v.into()) });
+                let v = it.as_slice().first().filter(|v| !v.starts_with("--")).cloned();
+                libs = GameLibs::RustPort(match v {
+                    None => PortSource::Release,
+                    Some(v) => {
+                        it.next();
+                        if v.contains("://") { PortSource::Url(v) } else { PortSource::Dir(v.into()) }
+                    }
+                });
             }
             _ => bail!("unknown option {arg}\n{USAGE}"),
         }

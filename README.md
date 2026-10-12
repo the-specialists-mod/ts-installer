@@ -35,10 +35,12 @@ TS 3.0 only ever shipped a 32-bit Windows client (`client.dll`). The launcher of
 | Choice | Xash3D build | Linux | Windows |
 |---|---|---|---|
 | Original TS 3.0 DLLs | `win32-i386` | runs through Wine | native |
-| [Rust port](https://github.com/CrunchyMonkies/rust-hlmod-the-specialists) | native 64-bit | native | native |
+| [Rust port](https://github.com/the-specialists-mod/the-specialistsmod-rs) | native 64-bit | native | native |
 
-For the Rust port, point the launcher at its `dist/` folder (from `cargo xtask dist`), one
-platform's `ts/` folder, or a `.zip` / `.tar.gz` URL with the same layout. With a Half-Life
+The Rust port is downloaded from the latest
+[the-specialistsmod-rs release](https://github.com/the-specialists-mod/the-specialistsmod-rs/releases),
+using the archive for your platform. You can instead point the launcher at its `dist/` folder
+(from `cargo xtask dist`), one platform's `ts/` folder, or a `.zip` / `.tar.gz` URL with the same layout. With a Half-Life
 install, the `*-i686` libraries are used. On Linux, a Half-Life install with the original DLLs is
 launched through Steam, which needs Proton for it.
 
@@ -103,7 +105,9 @@ ts-launcher install --root ~/games/ts --xash                      # everything d
 ts-launcher install --root ~/games/ts --xash \
     --valve-from ~/.local/share/Steam/steamapps/common/Half-Life \
     --ts ~/Downloads/ts-3-final.exe \
-    --port ~/src/rust-hlmod-the-specialists/dist                  # native Rust port
+    --port                                                        # native Rust port, latest release
+ts-launcher install --root ~/games/ts-dev --xash \
+    --port ~/src/the-specialistsmod-rs/dist                       # Rust port from a local build
 ts-launcher install --root "C:\Program Files (x86)\Steam\steamapps\common\Half-Life" --half-life
 ts-launcher play
 ts-launcher print-command
