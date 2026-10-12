@@ -131,8 +131,22 @@ starts as a copy of the file the game would otherwise load, so key bindings stay
 The old GoldSrc/Xash master servers are gone, so the server browser combines
 [`servers.txt`](servers.txt) in this repository (downloaded at run time, so adding a line here
 lists a server for everyone; open a pull request), Xash3D FWGS's HTTP list, a LAN broadcast, your
-favorites and, with a Steam Web API key, Steam's master server. Every server is asked directly
-(A2S_INFO / A2S_PLAYER) for its name, map, players and ping.
+favorites and Steam's master server. Every server is asked directly (A2S_INFO / A2S_PLAYER) for
+its name, map, players and ping.
+
+Steam's list comes through the Steam client when it is running (with
+[steamworks-rs](https://github.com/Noxime/steamworks-rs); Steam shows you as playing Half-Life for
+the few seconds the query takes), otherwise through the Web API if you enter a key. The launcher
+carries Valve's `steam_api` library and only loads it for that query, so it still starts where
+Steam isn't installed: `.cargo/config.toml` links steamworks-sys against empty stand-ins and
+`build.rs` stubs the Steam API functions, which `src/steam.rs` points at the real library.
+
+Most servers on Steam's list are GoldSrc servers that check a Steam ticket. Xash3D FWGS can't
+get one itself, so when Steam is running the launcher starts a
+[Steam broker](https://github.com/FWGS/xash3d-fwgs/blob/master/Documentation/extensions/steam-broker.md)
+next to it (`ts-launcher steam-broker`, on 127.0.0.1:27420) and launches the engine with
+`cl_ticket_generator steam`. The broker asks Steam for each server's ticket and exits with the
+game. You need Half-Life on your Steam account; Steam shows you as playing Half-Life meanwhile.
 
 **Start a server** hosts a game on this computer: a listen server (the game hosts the map and you
 play on it) or, with the Linux FWGS build, a dedicated server. The launcher writes

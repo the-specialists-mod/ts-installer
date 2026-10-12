@@ -17,6 +17,10 @@ pub mod progress;
 pub mod server_host;
 pub mod servers;
 pub mod sources;
+#[cfg(steam_client)]
+pub mod steam;
+#[cfg(steam_client)]
+pub mod steam_broker;
 pub mod store;
 pub mod tsfiles;
 pub mod update;

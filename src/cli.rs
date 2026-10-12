@@ -119,6 +119,12 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             Ok(())
         }
+        // Not in USAGE: the server browser runs it to ask the Steam client (see steam.rs).
+        #[cfg(steam_client)]
+        Some(crate::steam::COMMAND) => crate::steam::print_server_list(),
+        // Not in USAGE either: Play runs it next to Xash3D FWGS (see steam_broker.rs).
+        #[cfg(steam_client)]
+        Some(crate::steam_broker::COMMAND) => crate::steam_broker::run(),
         _ => bail!("{USAGE}"),
     }
 }

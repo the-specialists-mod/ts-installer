@@ -25,3 +25,8 @@ sevenz-rust2 = "0.24.0"
 tar = "0.4.46"
 ureq = { version = "3.4.2", features = ["json"] }
 zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
+
+# The Steam client's server list. See build.rs and .cargo/config.toml for how it is linked.
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
+libloading = "0.8"
+steamworks = { version = "0.13.1", features = ["raw-bindings"] }

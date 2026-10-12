@@ -1,15 +1,44 @@
 # The Specialists 3.0 servers shown in the launcher's server browser.
 #
 # The launcher downloads this file from
-# https://raw.githubusercontent.com/the-specialists-mod/ts-installer/main/servers.txt
+# https://raw.githubusercontent.com/the-specialists-mod/tsmod-launcher/main/servers.txt
 # so a change here reaches every player without a new release.
 #
 # Format (the same as Xash3D FWGS's server list): one server per line,
 #   gs <host>:<port>    a GoldSrc (Half-Life) server
 #   ip <host>:<port>    any other server, e.g. Xash3D FWGS
-# <host> is a name or an IPv4 address. Lines starting with # are comments.
+# <host> is a name or an IPv4 address. Lines starting with # are comments. List each server once:
+# by its name if it has one, not also by the address the name resolves to.
 #
 # To add a server, open a pull request that adds its line, with a comment saying who runs it.
 
-# TSMOD.NET - Deathmatch (Moscow)
-gs srv.tsmod.net:27015
+# TSMOD.NET (Moscow)
+gs srv.tsmod.net:27015    # Deathmatch
+gs srv.tsmod.net:27016    # Ranked Duel
+gs srv.tsmod.net:27017    # Team Deathmatch
+gs srv.tsmod.net:27018    # Tournament
+
+# Listed on Steam's master server (app 70, gamedir ts) on 2026-10-13, named as they answered then.
+gs 18.210.40.12:27015     # goldsrc.net The Specialists
+gs 50.80.57.65:27018      # [HLVault.com] The Specialists - Official
+gs 50.80.57.65:27023      # [HLVault.com] The Specialists - Official (Mecklenburg)
+gs 51.81.48.8:27002       # {{WaR}} Enter The Matrix [US]
+gs 54.36.177.240:27075    # [APG] - TS 3.0 [Stats|RTV|FastDL]
+gs 68.205.148.254:27015   # TS Halloween Hunger
+gs 76.250.187.138:27016   # FISK CITY TSRP
+gs 76.250.187.138:27021   # FISK CITY TSRP
+gs 90.255.2.207:27015     # E-Stylers (TESTING)
+gs 91.191.213.98:27032    # GoldSrcSaturdays.com/discord - The Specialists
+gs 151.236.216.75:27015   # LinuxGSM
+gs 167.114.118.175:27538  # The Specialists
+gs 184.64.29.205:27015    # Steinburg's Panda Reserve
+gs 192.236.131.199:27016  # The SpeciaIists
+gs 195.60.166.155:27094   # The Boost
+gs 208.115.220.42:27056   # i miss us (the specialists 3.0) TESTING
+gs 216.39.240.133:7781    # Prox's Meme Specialists
+gs 5.161.110.53:27015     # 24/7 CHAZ TSRP
+gs 173.28.100.122:27019
+# Listed but not answering on 2026-10-13.
+gs 38.18.119.158:27025
+gs 85.140.84.157:27015
+gs 108.80.179.176:27017

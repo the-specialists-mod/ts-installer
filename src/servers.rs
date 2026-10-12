@@ -1,8 +1,9 @@
 //! Finding TS servers and asking them about themselves (A2S_INFO / A2S_PLAYER).
 //!
 //! The UDP master servers GoldSrc and Xash used are gone, so the list comes from this repository's
-//! `servers.txt`, Xash3D FWGS's HTTP list, Steam's Web API (with a key), a LAN broadcast and the
-//! user's favorites. Every address is then queried directly.
+//! `servers.txt`, Xash3D FWGS's HTTP list, Steam (through the Steam client when it is running,
+//! or the Web API with a key), a LAN broadcast and the user's favorites. Every address is then
+//! queried directly.
 
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
@@ -33,7 +34,7 @@ const LAN_PORTS: std::ops::RangeInclusive<u16> = 27015..=27020;
 const WORKERS: usize = 24;
 
 /// Where a server address came from. A server found several ways has several.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
     Favorite,
     Lan,
@@ -311,6 +312,17 @@ pub fn steam_list(key: &str) -> Result<Vec<String>> {
     Ok(steam_addresses(&json))
 }
 
+/// Steam's master server through the Steam client; false when Steam isn't running.
+#[cfg(steam_client)]
+fn steam_client_list(found: &mut dyn FnMut(String)) -> Result<bool> {
+    crate::steam::server_list(found)
+}
+
+#[cfg(not(steam_client))]
+fn steam_client_list(_: &mut dyn FnMut(String)) -> Result<bool> {
+    Ok(false)
+}
+
 fn steam_addresses(json: &serde_json::Value) -> Vec<String> {
     json["response"]["servers"]
         .as_array()
@@ -410,8 +422,25 @@ fn refresh_blocking(favorites: Vec<String>, steam_key: String, emit: Arc<dyn Fn(
             Ok(list)
         }),
     ));
-    if !steam_key.trim().is_empty() {
-        sources.push(spawn_source(Source::Steam, Box::new(move || steam_list(&steam_key))));
+    {
+        let (tx, emit) = (tx.clone(), emit.clone());
+        sources.push(std::thread::spawn(move || {
+            // The Steam client when it's running, otherwise the Web API with the user's key.
+            let client = steam_client_list(&mut |a| drop(tx.send((a, Source::Steam))));
+            let failed = |e: anyhow::Error| emit(Event::SourceFailed { source: Source::Steam, error: format!("{e:#}") });
+            match client {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(e) if steam_key.trim().is_empty() => return failed(e),
+                Err(e) => log::warn!("{e:#}"),
+            }
+            if !steam_key.trim().is_empty() {
+                match steam_list(&steam_key) {
+                    Ok(list) => list.into_iter().for_each(|a| drop(tx.send((a, Source::Steam)))),
+                    Err(e) => failed(e),
+                }
+            }
+        }));
     }
     {
         let (emit, queried) = (emit.clone(), queried.clone());
@@ -520,6 +549,14 @@ mod tests {
         let text = "# valve server list\nip 1.2.3.4:27015\n\ngs srv.example.net:27016 # comment\nbogus\n5.6.7.8:27017\n";
         assert_eq!(parse_list(text), ["1.2.3.4:27015", "srv.example.net:27016", "5.6.7.8:27017"]);
         assert!(parse_list(CURATED_BUILTIN).contains(&"srv.tsmod.net:27015".to_owned()));
+    }
+
+    #[test]
+    fn curated_entries_are_unique() {
+        let list = parse_list(CURATED_BUILTIN);
+        let unique: HashSet<_> = list.iter().map(|a| a.to_lowercase()).collect();
+        assert_eq!(unique.len(), list.len(), "servers.txt lists a server twice");
+        assert!(list.len() > 20);
     }
 
     #[test]

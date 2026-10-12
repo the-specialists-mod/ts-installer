@@ -13,6 +13,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, Textar
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -65,19 +66,32 @@ struct RowView {
     bots: u8,
     ping: Option<u32>,
     address: String,
-    sources: String,
+    /// Where it was found, besides being a favorite (the star shows that).
+    sources: Vec<Source>,
     answered: bool,
 }
 
-const COLUMNS: [(&str, &str, f32); 8] = [
-    ("fav", "", 30.),
+/// Steam's logo (Simple Icons, CC0); Lucide has no brand icons.
+const STEAM_ICON: &[u8] = include_bytes!("../../assets/steam.svg");
+
+fn source_icon(source: Source) -> Icon {
+    match source {
+        Source::Favorite => Icon::new(Lucide::Star),
+        Source::Lan => Icon::new(Lucide::Network),
+        Source::List => Icon::new(Lucide::ScrollText),
+        Source::Steam => Icon::default().data(STEAM_ICON),
+    }
+}
+
+/// The first column holds the favorite star and the icons of the other sources.
+const COLUMNS: [(&str, &str, f32); 7] = [
+    ("fav", "", 76.),
     ("lock", "", 28.),
     ("name", "Name", 226.),
     ("map", "Map", 116.),
     ("players", "Players", 112.),
     ("ping", "Ping", 76.),
     ("address", "Address", 160.),
-    ("source", "Source", 80.),
 ];
 
 struct ServerTable {
@@ -96,14 +110,13 @@ impl ServerTable {
             Some((col, sort)) if sort != ColumnSort::Default => {
                 self.rows.sort_by(|a, b| {
                     let o = match COLUMNS[col].0 {
-                        "fav" => a.favorite.cmp(&b.favorite),
+                        "fav" => a.favorite.cmp(&b.favorite).then_with(|| a.sources.cmp(&b.sources)),
                         "lock" => a.password.cmp(&b.password),
                         "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                         "map" => a.map.cmp(&b.map),
                         "players" => a.players.cmp(&b.players),
                         "ping" => a.ping.unwrap_or(u32::MAX).cmp(&b.ping.unwrap_or(u32::MAX)),
-                        "address" => a.address.cmp(&b.address),
-                        _ => a.sources.cmp(&b.sources),
+                        _ => a.address.cmp(&b.address),
                     };
                     if sort == ColumnSort::Descending { o.reverse() } else { o }
                 });
@@ -149,16 +162,31 @@ impl TableDelegate for ServerTable {
         match COLUMNS[col_ix].0 {
             "fav" => {
                 let (tab, addr, on) = (self.tab.clone(), r.addr, r.favorite);
-                div()
+                let star = h_flex()
                     .id(("star", row_ix))
                     .cursor_pointer()
                     .child(Icon::new(Lucide::Star).small().text_color(if on { cx.theme().warning } else { muted.opacity(0.4) }))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if on { "Favorite (click to remove)" } else { "Add to favorites" }).build(window, cx)
+                    })
                     .on_click(move |_, _, cx| {
                         let _ = tab.update(cx, |tab, cx| tab.toggle_favorite(addr, cx));
-                    })
+                    });
+                h_flex()
+                    .size_full()
+                    .gap_1p5()
+                    .child(star)
+                    .children(r.sources.iter().enumerate().map(|(i, &s)| {
+                        h_flex()
+                            .id(("source", row_ix * 4 + i))
+                            .child(source_icon(s).small().text_color(muted))
+                            .tooltip(move |window, cx| Tooltip::new(s.label()).build(window, cx))
+                    }))
                     .into_any_element()
             }
-            "lock" if r.password => Icon::new(Lucide::Lock).small().text_color(muted).into_any_element(),
+            "lock" if r.password => {
+                h_flex().size_full().justify_center().child(Icon::new(Lucide::Lock).small().text_color(muted)).into_any_element()
+            }
             "lock" => div().into_any_element(),
             "name" if !r.answered => div().text_color(muted).child(text(r.name.clone())).into_any_element(),
             "name" => text(r.name.clone()),
@@ -169,8 +197,7 @@ impl TableDelegate for ServerTable {
                 text(format!("{}/{}{bots}", r.players, r.max_players))
             }
             "ping" => text(r.ping.map(|p| format!("{p} ms")).unwrap_or_else(|| "—".into())),
-            "address" => div().text_color(muted).child(text(r.address.clone())).into_any_element(),
-            _ => div().text_color(muted).child(text(r.sources.clone())).into_any_element(),
+            _ => div().text_color(muted).child(text(r.address.clone())).into_any_element(),
         }
     }
 
@@ -485,6 +512,8 @@ impl ServersTab {
             .filter(|r| r.listed())
             .map(|r| {
                 let info = r.info.clone().unwrap_or_default();
+                let mut sources: Vec<Source> = r.sources.iter().copied().filter(|&s| s != Source::Favorite).collect();
+                sources.sort();
                 RowView {
                     addr: r.addr,
                     favorite: r.favorite.is_some(),
@@ -500,7 +529,7 @@ impl ServersTab {
                     bots: info.bots,
                     ping: r.ping.map(|p| p.as_millis() as u32),
                     address: r.label.clone(),
-                    sources: r.sources.iter().map(|s| s.label()).collect::<Vec<_>>().join(", "),
+                    sources,
                     answered: r.info.is_some(),
                 }
             })
@@ -673,7 +702,7 @@ impl ServersTab {
             .text_sm()
             .child(div().text_color(muted).child(
                 "Servers come from the launcher's list (servers.txt in its repository), Xash3D FWGS's list, your LAN, \
-                 your favorites and, with an API key, Steam's master server.",
+                 your favorites and Steam's master server: through Steam when it is running, otherwise with an API key.",
             ))
             .child(
                 h_flex()
@@ -694,7 +723,7 @@ impl ServersTab {
                     .gap_2()
                     .child(div().w(px(130.)).child("Steam API key"))
                     .child(div().flex_1().child(Input::new(&self.steam_key).small().mask_toggle()))
-                    .child(div().text_xs().text_color(muted).child("steamcommunity.com/dev/apikey")),
+                    .child(div().text_xs().text_color(muted).child("Without Steam: steamcommunity.com/dev/apikey")),
             );
 
         let details = match selected {

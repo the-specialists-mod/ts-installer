@@ -1,0 +1,6 @@
+# steamworks-sys links steam_api dynamically, and a launcher that needs the library next to it
+# won't start without it. Point it at empty stand-ins instead: build.rs gives every Steam API
+# function a stub, and src/steam.rs loads the real library (built into the launcher) when it is
+# wanted.
+[env]
+STEAM_SDK_LOCATION = { value = "assets/steam/link-stub", relative = true }
