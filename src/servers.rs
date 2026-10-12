@@ -552,6 +552,14 @@ mod tests {
     }
 
     #[test]
+    fn curated_entries_are_unique() {
+        let list = parse_list(CURATED_BUILTIN);
+        let unique: HashSet<_> = list.iter().map(|a| a.to_lowercase()).collect();
+        assert_eq!(unique.len(), list.len(), "servers.txt lists a server twice");
+        assert!(list.len() > 20);
+    }
+
+    #[test]
     fn steam_json() {
         let json = serde_json::json!({"response": {"servers": [{"addr": "1.2.3.4:27015", "gamedir": "ts"}, {"name": "x"}]}});
         assert_eq!(steam_addresses(&json), ["1.2.3.4:27015"]);
