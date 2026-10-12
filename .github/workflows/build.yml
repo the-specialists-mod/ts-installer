@@ -45,10 +45,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
       - run: |
-          mv ts-launcher-linux-x86_64/ts-launcher ts-launcher-linux-x86_64.bin
-          mv ts-launcher-windows-x86_64/ts-launcher.exe ts-launcher-windows-x86_64.exe
+          mv ts-launcher-linux-x86_64/ts-launcher ts-launcher-${{ github.ref_name }}-linux-x86_64.bin
+          mv ts-launcher-windows-x86_64/ts-launcher.exe ts-launcher-${{ github.ref_name }}-windows-x86_64.exe
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            ts-launcher-linux-x86_64.bin
-            ts-launcher-windows-x86_64.exe
+            ts-launcher-${{ github.ref_name }}-linux-x86_64.bin
+            ts-launcher-${{ github.ref_name }}-windows-x86_64.exe
