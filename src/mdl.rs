@@ -539,7 +539,7 @@ mod tests {
     use super::*;
 
     fn shipped() -> Vec<PathBuf> {
-        let dir = Path::new(env!("HOME")).join("dev/hl/ts_original/models/player");
+        let dir = Path::new(&std::env::var_os("HOME").unwrap_or_default()).join("dev/hl/ts_original/models/player");
         let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
         let mut out: Vec<PathBuf> = entries
             .flatten()

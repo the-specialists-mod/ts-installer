@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn reads_the_real_lists() {
-        let ts = Path::new(env!("HOME")).join("dev/hl/ts_original/gfx/shell/kb_act.lst");
+        let ts = Path::new(&std::env::var_os("HOME").unwrap_or_default()).join("dev/hl/ts_original/gfx/shell/kb_act.lst");
         if let Ok(bytes) = std::fs::read(ts) {
             let s = parse_actions(&String::from_utf8_lossy(&bytes));
             let titles: Vec<_> = s.iter().map(|s| s.title.as_str()).collect();

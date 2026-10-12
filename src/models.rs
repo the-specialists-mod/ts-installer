@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn decodes_shipped_previews() {
-        let dir = Path::new(env!("HOME")).join("dev/hl/ts_original");
+        let dir = Path::new(&std::env::var_os("HOME").unwrap_or_default()).join("dev/hl/ts_original");
         let models = list(&dir);
         if models.is_empty() {
             eprintln!("TS 3.0 not found; skipping");
