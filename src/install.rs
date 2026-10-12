@@ -6,15 +6,16 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::progress::Progress;
-use crate::sources::{self, XashBuild};
+use crate::sources::{self, Arch, XashBuild};
 
 /// Which engine runs TS.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Engine {
     /// An existing Half-Life install: TS goes into its `ts` directory.
     HalfLife,
-    /// Xash3D FWGS in the install directory with a `valve` directory beside it.
-    Xash { engine: EngineSource, valve: ValveSource },
+    /// Xash3D FWGS in the install directory with a `valve` directory beside it. `arch` picks the
+    /// native build for the Rust port; the original DLLs always need 32-bit Windows.
+    Xash { engine: EngineSource, valve: ValveSource, arch: Arch },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -98,6 +99,7 @@ impl Runtime {
             (Self::Xash(XashBuild::LinuxAmd64), _) => "linux-x86_64",
             (Self::Xash(XashBuild::WindowsAmd64), _) => "windows-x86_64",
             (Self::Xash(XashBuild::WindowsI386), _) => "windows-i686",
+            (Self::Xash(XashBuild::LinuxI386), _) => "linux-i686",
         }
     }
 
@@ -161,7 +163,10 @@ pub fn ts_libs(ts: &Path) -> Option<TsLibs> {
 /// The Xash3D FWGS build installed in `root`, judged by its files.
 pub fn xash_build_in(root: &Path) -> Option<XashBuild> {
     if root.join("xash3d").is_file() && root.join("libxash.so").is_file() {
-        return Some(XashBuild::LinuxAmd64);
+        return Some(match elf_class(&root.join("libxash.so")) {
+            Some(1) => XashBuild::LinuxI386,
+            _ => XashBuild::LinuxAmd64,
+        });
     }
     if !root.join("xash3d.exe").is_file() || !root.join("xash.dll").is_file() {
         return None;
@@ -170,6 +175,14 @@ pub fn xash_build_in(root: &Path) -> Option<XashBuild> {
         Some(0x8664) => XashBuild::WindowsAmd64,
         _ => XashBuild::WindowsI386,
     })
+}
+
+/// The ELF class byte: 1 for 32-bit, 2 for 64-bit.
+fn elf_class(path: &Path) -> Option<u8> {
+    use std::io::Read;
+    let mut b = [0u8; 5];
+    std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
+    (b[..4] == *b"\x7fELF").then_some(b[4])
 }
 
 /// The COFF machine field of a PE file.
@@ -191,12 +204,12 @@ impl Plan {
         match (&self.engine, &self.libs) {
             (Engine::HalfLife, _) => Ok(None),
             (Engine::Xash { engine: EngineSource::Keep(build), .. }, _) => Ok(Some(*build)),
-            (Engine::Xash { .. }, GameLibs::RustPort(_)) => XashBuild::native().map(Some),
+            (Engine::Xash { arch, .. }, GameLibs::RustPort(_)) => XashBuild::native_for(*arch).map(Some),
             // Keeping a Rust port install needs the native engine, just like installing one.
-            (Engine::Xash { .. }, GameLibs::Original)
+            (Engine::Xash { arch, .. }, GameLibs::Original)
                 if self.ts == TsSource::Keep && ts_libs(&self.root.join("ts")) == Some(TsLibs::RustPort) =>
             {
-                XashBuild::native().map(Some)
+                XashBuild::native_for(*arch).map(Some)
             }
             (Engine::Xash { .. }, GameLibs::Original) => Ok(Some(XashBuild::WindowsI386)),
         }
@@ -283,7 +296,7 @@ impl Plan {
     /// Titles of the steps [`Plan::run`] will take, in order.
     pub fn steps(&self) -> Vec<String> {
         let mut steps = Vec::new();
-        if let Engine::Xash { engine, valve } = &self.engine {
+        if let Engine::Xash { engine, valve, .. } = &self.engine {
             if let (EngineSource::Download, Ok(Some(build))) = (engine, self.xash_build()) {
                 steps.push(format!("Install {}", build.label()));
             }
@@ -319,7 +332,7 @@ impl Plan {
             step += 1;
         };
 
-        if let Engine::Xash { engine, valve } = &self.engine {
+        if let Engine::Xash { engine, valve, .. } = &self.engine {
             if let (EngineSource::Download, Some(build)) = (engine, self.xash_build()?) {
                 next(progress);
                 sources::install_fwgs(build, &self.root, progress)?;
@@ -472,7 +485,7 @@ impl LibChoice {
         if ts_libs(&ts)? == TsLibs::Original {
             return Some(Self::Original);
         }
-        let amd64 = matches!(install.runtime, Runtime::Xash(b) if b != XashBuild::WindowsI386);
+        let amd64 = matches!(install.runtime, Runtime::Xash(b) if b.is_64bit());
         Some(match (amd64, ts.join(PORT_DEBUG_MARKER).exists()) {
             (false, false) => Self::RustI686,
             (true, false) => Self::RustAmd64,
@@ -491,13 +504,15 @@ impl LibChoice {
     }
 
     /// The runtime that loads these libraries, for an install that runs `runtime` now. Half-Life
-    /// stays as it is; Xash3D switches between the 32-bit Windows build and the native one.
+    /// stays as it is; Xash3D uses 32-bit Windows for the originals and the native 32- or 64-bit
+    /// build for the Rust port.
     pub fn runtime(self, runtime: Runtime) -> Result<Runtime> {
         Ok(match runtime {
             Runtime::GoldSrc if self.amd64() => bail!("Half-Life only loads 32-bit game libraries"),
             Runtime::GoldSrc => Runtime::GoldSrc,
             Runtime::Xash(_) if self.amd64() => Runtime::Xash(XashBuild::native()?),
-            Runtime::Xash(_) => Runtime::Xash(XashBuild::WindowsI386),
+            Runtime::Xash(_) if self == Self::Original => Runtime::Xash(XashBuild::WindowsI386),
+            Runtime::Xash(_) => Runtime::Xash(XashBuild::native_for(Arch::I386)?),
         })
     }
 }
@@ -555,7 +570,7 @@ mod tests {
 
     #[test]
     fn original_libs_use_32_bit_windows_xash() {
-        let p = plan(Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs }, GameLibs::Original);
+        let p = plan(Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs, arch: Arch::Amd64 }, GameLibs::Original);
         assert_eq!(p.xash_build().unwrap(), Some(XashBuild::WindowsI386));
         assert_eq!(p.steps().len(), 3);
     }
@@ -563,7 +578,7 @@ mod tests {
     #[test]
     fn rust_port_uses_native_xash() {
         let p = plan(
-            Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs },
+            Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs, arch: Arch::Amd64 },
             GameLibs::RustPort(PortSource::Url("https://x/y.zip".into())),
         );
         assert_eq!(p.xash_build().unwrap(), XashBuild::native().ok());
@@ -578,7 +593,7 @@ mod tests {
         assert!(p.steps().is_empty());
         let p = Plan {
             root: "/tmp/x".into(),
-            engine: Engine::Xash { engine: EngineSource::Keep(XashBuild::WindowsI386), valve: ValveSource::Keep },
+            engine: Engine::Xash { engine: EngineSource::Keep(XashBuild::WindowsI386), valve: ValveSource::Keep, arch: Arch::Amd64 },
             ts: TsSource::Keep,
             libs: GameLibs::Original,
         };
@@ -594,7 +609,8 @@ mod tests {
         assert!(LibChoice::RustAmd64Debug.runtime(Runtime::GoldSrc).is_err());
         let native = Runtime::Xash(XashBuild::native().unwrap());
         assert_eq!(LibChoice::Original.runtime(native).unwrap(), Runtime::Xash(XashBuild::WindowsI386));
-        assert_eq!(LibChoice::RustI686.runtime(native).unwrap().port_platform(), "windows-i686");
+        let i686 = if cfg!(windows) { "windows-i686" } else { "linux-i686" };
+        assert_eq!(LibChoice::RustI686.runtime(native).unwrap().port_platform(), i686);
         assert_eq!(LibChoice::RustAmd64.runtime(Runtime::Xash(XashBuild::WindowsI386)).unwrap(), native);
     }
 
@@ -628,6 +644,20 @@ mod tests {
         assert!(!ts.join("gameinfo.txt").exists());
         assert_eq!(LibChoice::current(&install), Some(LibChoice::Original));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn rust_port_can_use_32_bit_xash() {
+        let p = plan(
+            Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs, arch: Arch::I386 },
+            GameLibs::RustPort(PortSource::Release { debug: false }),
+        );
+        let build = if cfg!(windows) { XashBuild::WindowsI386 } else { XashBuild::LinuxI386 };
+        assert_eq!(p.xash_build().unwrap(), Some(build));
+        assert_eq!(p.port_platform().unwrap(), if cfg!(windows) { "windows-i686" } else { "linux-i686" });
+        // The originals ignore the choice: they only run on 32-bit Windows.
+        let p = plan(Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs, arch: Arch::Amd64 }, GameLibs::Original);
+        assert_eq!(p.xash_build().unwrap(), Some(XashBuild::WindowsI386));
     }
 
     #[test]

@@ -18,6 +18,7 @@ use gpui_kit::*;
 
 use ts_launcher::install::{Engine, EngineSource, Existing, GameLibs, Installation, Plan, PortSource, TsLibs, TsSource, ValveSource};
 use ts_launcher::progress::{Event, Progress};
+use ts_launcher::sources::Arch;
 use ts_launcher::{detect, sources};
 
 use super::{Launcher, Screen, human_bytes, path_text, section};
@@ -69,6 +70,8 @@ pub struct Setup {
     /// What the chosen folder already contains.
     existing: Existing,
     keep_engine: bool,
+    /// The native Xash3D build for the Rust port.
+    xash_arch: Arch,
     valve: ValveChoice,
     valve_from: Option<PathBuf>,
     ts: TsChoice,
@@ -104,6 +107,7 @@ impl Setup {
             xash_root: detect::default_xash_dir(),
             existing: Existing::default(),
             keep_engine: false,
+            xash_arch: Arch::Amd64,
             valve: ValveChoice::Download,
             valve_from: None,
             ts: TsChoice::Download,
@@ -172,6 +176,7 @@ impl Setup {
                     ValveChoice::Download => ValveSource::XashTs,
                     ValveChoice::Copy => ValveSource::CopyFrom(self.valve_from.clone().unwrap_or_default()),
                 },
+                arch: self.xash_arch,
             }
         } else {
             Engine::HalfLife
@@ -555,6 +560,28 @@ impl Launcher {
             )
             .when(!s.rust_port && !original_note.is_empty(), |d| {
                 d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
+            })
+            .when(s.rust_port && s.use_xash && !s.keep_engine, |d| {
+                d.child(
+                    h_flex()
+                        .gap_3()
+                        .child(div().text_sm().child("Xash3D FWGS build"))
+                        .child(
+                            RadioGroup::horizontal("xash-arch")
+                                .selected_index(Some(s.xash_arch as usize))
+                                .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                                    this.setup.xash_arch = [Arch::Amd64, Arch::I386][*ix];
+                                    cx.notify();
+                                }))
+                                .child(Radio::new("arch-amd64").label(Arch::Amd64.label()))
+                                .child(Radio::new("arch-i386").label(Arch::I386.label())),
+                        ),
+                )
+                .when(s.xash_arch == Arch::I386 && !cfg!(windows), |d| {
+                    d.child(div().text_sm().text_color(cx.theme().muted_foreground).child(
+                        "The 32-bit Linux build loads the port's i686 libraries and needs your system's 32-bit libraries (lib32 / i386 packages).",
+                    ))
+                })
             })
             .when(s.rust_port, |d| {
                 d.child(

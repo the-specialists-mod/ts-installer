@@ -199,7 +199,7 @@ pub fn bot_support(kind: ServerKind, libs: Option<TsLibs>) -> BotSupport {
 /// `xash` next to `xash3d`. Windows FWGS has no dedicated build, and HLDS isn't set up here.
 pub fn dedicated_binary(install: &Installation) -> Option<PathBuf> {
     match install.runtime {
-        Runtime::Xash(XashBuild::LinuxAmd64) => Some(install.root.join("xash")).filter(|p| p.is_file()),
+        Runtime::Xash(XashBuild::LinuxAmd64 | XashBuild::LinuxI386) => Some(install.root.join("xash")).filter(|p| p.is_file()),
         _ => None,
     }
 }

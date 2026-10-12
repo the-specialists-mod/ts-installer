@@ -29,6 +29,22 @@ pub const TS_INSTALLER_MD5: &str = "e0fe976a8d9d59393e66b9f1cb94c256";
 /// The Rust port's releases: one `the-specialists-rs-<tag>-<platform>` archive per platform.
 pub const PORT_REPO: &str = "the-specialists-mod/the-specialistsmod-rs";
 
+/// Whether a native Xash3D FWGS build is 64- or 32-bit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Arch {
+    Amd64,
+    I386,
+}
+
+impl Arch {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Amd64 => "64-bit (amd64)",
+            Self::I386 => "32-bit (i386)",
+        }
+    }
+}
+
 /// A Xash3D FWGS release build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum XashBuild {
@@ -36,6 +52,8 @@ pub enum XashBuild {
     WindowsI386,
     WindowsAmd64,
     LinuxAmd64,
+    /// 32-bit Linux: loads the Rust port's i686 libraries (needs the system's 32-bit libraries).
+    LinuxI386,
 }
 
 impl XashBuild {
@@ -44,7 +62,12 @@ impl XashBuild {
             Self::WindowsI386 => "xash3d-fwgs-win32-i386.7z",
             Self::WindowsAmd64 => "xash3d-fwgs-win32-amd64.7z",
             Self::LinuxAmd64 => "xash3d-fwgs-linux-amd64.tar.gz",
+            Self::LinuxI386 => "xash3d-fwgs-linux-i386.tar.gz",
         }
+    }
+
+    pub fn is_64bit(self) -> bool {
+        matches!(self, Self::WindowsAmd64 | Self::LinuxAmd64)
     }
 
     pub fn is_windows(self) -> bool {
@@ -65,6 +88,16 @@ impl XashBuild {
         }
     }
 
+    /// The native build of `arch` for the machine we are running on.
+    pub fn native_for(arch: Arch) -> Result<Self> {
+        match (arch, std::env::consts::OS, std::env::consts::ARCH) {
+            (Arch::Amd64, ..) => Self::native(),
+            (Arch::I386, "windows", "x86_64" | "x86") => Ok(Self::WindowsI386),
+            (Arch::I386, "linux", "x86_64" | "x86") => Ok(Self::LinuxI386),
+            (_, os, arch) => bail!("no 32-bit Xash3D FWGS build is set up for {os}/{arch}"),
+        }
+    }
+
     /// Whether running this build here needs Wine.
     pub fn needs_wine(self) -> bool {
         self.is_windows() && !cfg!(windows)
@@ -75,6 +108,7 @@ impl XashBuild {
             Self::WindowsI386 => "Xash3D FWGS (Windows, 32-bit)",
             Self::WindowsAmd64 => "Xash3D FWGS (Windows, 64-bit)",
             Self::LinuxAmd64 => "Xash3D FWGS (Linux, 64-bit)",
+            Self::LinuxI386 => "Xash3D FWGS (Linux, 32-bit)",
         }
     }
 }

@@ -35,7 +35,11 @@ TS 3.0 only ever shipped a 32-bit Windows client (`client.dll`). The launcher of
 | Choice | Xash3D build | Linux | Windows |
 |---|---|---|---|
 | Original TS 3.0 DLLs | `win32-i386` | runs through Wine | native |
-| [Rust port](https://github.com/the-specialists-mod/the-specialistsmod-rs) | native 64-bit | native | native |
+| [Rust port](https://github.com/the-specialists-mod/the-specialistsmod-rs) | native 64-bit or 32-bit | native | native |
+
+With the Rust port you pick the 64-bit (amd64) or 32-bit (i386) Xash3D FWGS build, which loads
+the port's `x86_64` or `i686` libraries (`--32bit` on the command line). The 32-bit Linux build
+needs the system's 32-bit libraries (lib32 / i386 packages).
 
 The Rust port is downloaded from the latest
 [the-specialistsmod-rs release](https://github.com/the-specialists-mod/the-specialistsmod-rs/releases),
@@ -47,7 +51,7 @@ launched through Steam, which needs Proton for it.
 An installation's overview can switch its game libraries later between the TS 3.0 originals and
 the Rust port's i686 and amd64 builds, each as a release or a debug build (the `-debug` archives,
 with debug info and assertions). Xash3D installs get the engine build the libraries
-need (32-bit Windows for the originals and i686, native 64-bit for amd64); Half-Life installs only
+need (32-bit Windows for the originals, native 32-bit for i686, native 64-bit for amd64); Half-Life installs only
 load 32-bit libraries, so they don't offer amd64. The TS 3.0 files the port replaces are kept in
 `ts/.tsinstaller-originals` and put back when switching to the originals.
 

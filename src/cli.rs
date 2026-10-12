@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::install::{Engine, EngineSource, Existing, GameLibs, Plan, PortSource, TsSource, ValveSource};
 use crate::progress::{Event, Progress};
+use crate::sources::Arch;
 use crate::store::Store;
 
 pub const USAGE: &str = "\
@@ -17,6 +18,8 @@ usage:
       --ts PATH                     use a local ts-3-final.exe or ts folder instead of downloading
       --port [DIR_OR_URL]           use the Rust port libraries instead of the TS 3.0 originals:
                                     its latest release unless a dist/ folder or archive URL is given
+      --32bit                       (xash) with the Rust port, use the 32-bit engine and the port's
+                                    i686 libraries instead of 64-bit
       --port-debug                  use the debug build of the Rust port's latest release
       --keep-engine | --keep-valve | --keep-ts
                                     keep what the folder already has instead of installing it
@@ -64,6 +67,7 @@ fn install(args: &[String]) -> Result<()> {
     let mut keep_engine = false;
     let mut ts = TsSource::Download;
     let mut libs = GameLibs::Original;
+    let mut arch = Arch::Amd64;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().cloned().with_context(|| format!("{arg} needs a value"));
@@ -86,6 +90,7 @@ fn install(args: &[String]) -> Result<()> {
                     }
                 });
             }
+            "--32bit" => arch = Arch::I386,
             "--port-debug" => libs = GameLibs::RustPort(PortSource::Release { debug: true }),
             _ => bail!("unknown option {arg}\n{USAGE}"),
         }
@@ -98,7 +103,7 @@ fn install(args: &[String]) -> Result<()> {
                 (true, None) => bail!("{} has no Xash3D FWGS engine to keep", root.display()),
                 (false, _) => EngineSource::Download,
             };
-            Engine::Xash { engine, valve }
+            Engine::Xash { engine, valve, arch }
         }
         false => Engine::HalfLife,
     };
