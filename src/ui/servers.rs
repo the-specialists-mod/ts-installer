@@ -66,9 +66,8 @@ struct RowView {
     bots: u8,
     ping: Option<u32>,
     address: String,
-    /// For sorting by source.
-    sources: String,
-    source_list: Vec<Source>,
+    /// Where it was found, besides being a favorite (the star shows that).
+    sources: Vec<Source>,
     answered: bool,
 }
 
@@ -84,15 +83,15 @@ fn source_icon(source: Source) -> Icon {
     }
 }
 
-const COLUMNS: [(&str, &str, f32); 8] = [
-    ("fav", "", 30.),
+/// The first column holds the favorite star and the icons of the other sources.
+const COLUMNS: [(&str, &str, f32); 7] = [
+    ("fav", "", 76.),
     ("lock", "", 28.),
     ("name", "Name", 226.),
     ("map", "Map", 116.),
     ("players", "Players", 112.),
     ("ping", "Ping", 76.),
     ("address", "Address", 160.),
-    ("source", "Source", 80.),
 ];
 
 struct ServerTable {
@@ -111,14 +110,13 @@ impl ServerTable {
             Some((col, sort)) if sort != ColumnSort::Default => {
                 self.rows.sort_by(|a, b| {
                     let o = match COLUMNS[col].0 {
-                        "fav" => a.favorite.cmp(&b.favorite),
+                        "fav" => a.favorite.cmp(&b.favorite).then_with(|| a.sources.cmp(&b.sources)),
                         "lock" => a.password.cmp(&b.password),
                         "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                         "map" => a.map.cmp(&b.map),
                         "players" => a.players.cmp(&b.players),
                         "ping" => a.ping.unwrap_or(u32::MAX).cmp(&b.ping.unwrap_or(u32::MAX)),
-                        "address" => a.address.cmp(&b.address),
-                        _ => a.sources.cmp(&b.sources),
+                        _ => a.address.cmp(&b.address),
                     };
                     if sort == ColumnSort::Descending { o.reverse() } else { o }
                 });
@@ -164,15 +162,26 @@ impl TableDelegate for ServerTable {
         match COLUMNS[col_ix].0 {
             "fav" => {
                 let (tab, addr, on) = (self.tab.clone(), r.addr, r.favorite);
-                h_flex()
+                let star = h_flex()
                     .id(("star", row_ix))
-                    .size_full()
-                    .justify_center()
                     .cursor_pointer()
                     .child(Icon::new(Lucide::Star).small().text_color(if on { cx.theme().warning } else { muted.opacity(0.4) }))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if on { "Favorite (click to remove)" } else { "Add to favorites" }).build(window, cx)
+                    })
                     .on_click(move |_, _, cx| {
                         let _ = tab.update(cx, |tab, cx| tab.toggle_favorite(addr, cx));
-                    })
+                    });
+                h_flex()
+                    .size_full()
+                    .gap_1p5()
+                    .child(star)
+                    .children(r.sources.iter().enumerate().map(|(i, &s)| {
+                        h_flex()
+                            .id(("source", row_ix * 4 + i))
+                            .child(source_icon(s).small().text_color(muted))
+                            .tooltip(move |window, cx| Tooltip::new(s.label()).build(window, cx))
+                    }))
                     .into_any_element()
             }
             "lock" if r.password => {
@@ -188,17 +197,7 @@ impl TableDelegate for ServerTable {
                 text(format!("{}/{}{bots}", r.players, r.max_players))
             }
             "ping" => text(r.ping.map(|p| format!("{p} ms")).unwrap_or_else(|| "—".into())),
-            "address" => div().text_color(muted).child(text(r.address.clone())).into_any_element(),
-            _ => h_flex()
-                .h_full()
-                .gap_1p5()
-                .children(r.source_list.iter().enumerate().map(|(i, &s)| {
-                    h_flex()
-                        .id(("source", row_ix * 4 + i))
-                        .child(source_icon(s).small().text_color(muted))
-                        .tooltip(move |window, cx| Tooltip::new(s.label()).build(window, cx))
-                }))
-                .into_any_element(),
+            _ => div().text_color(muted).child(text(r.address.clone())).into_any_element(),
         }
     }
 
@@ -513,7 +512,7 @@ impl ServersTab {
             .filter(|r| r.listed())
             .map(|r| {
                 let info = r.info.clone().unwrap_or_default();
-                let mut sources = r.sources.clone();
+                let mut sources: Vec<Source> = r.sources.iter().copied().filter(|&s| s != Source::Favorite).collect();
                 sources.sort();
                 RowView {
                     addr: r.addr,
@@ -530,8 +529,7 @@ impl ServersTab {
                     bots: info.bots,
                     ping: r.ping.map(|p| p.as_millis() as u32),
                     address: r.label.clone(),
-                    sources: sources.iter().map(|s| s.label()).collect::<Vec<_>>().join(", "),
-                    source_list: sources,
+                    sources,
                     answered: r.info.is_some(),
                 }
             })
