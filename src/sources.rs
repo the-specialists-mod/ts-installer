@@ -208,22 +208,25 @@ pub fn fetch_port_archive(url: &str, progress: &Progress) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Fetches the Rust port's latest release for `platform` and unpacks it into the cache.
-pub fn fetch_port_release(platform: &str, progress: &Progress) -> Result<PathBuf> {
+/// Fetches the Rust port's latest release for `platform` (its `-debug` build when `debug`) and
+/// unpacks it into the cache.
+pub fn fetch_port_release(platform: &str, debug: bool, progress: &Progress) -> Result<PathBuf> {
     let release = net::get_json(&format!("https://api.github.com/repos/{PORT_REPO}/releases/latest"))?;
     let tag = release["tag_name"].as_str().unwrap_or("latest");
-    let url = port_asset_url(&release, platform).with_context(|| format!("{PORT_REPO} release {tag} has no {platform} archive"))?;
-    progress.log(format!("Rust port {tag} for {platform}"));
+    let build = if debug { format!("{platform}-debug") } else { platform.to_owned() };
+    let url = port_asset_url(&release, &build).with_context(|| format!("{PORT_REPO} release {tag} has no {build} archive"))?;
+    progress.log(format!("Rust port {tag} for {build}"));
     fetch_port_archive(&url, progress)
 }
 
-/// Download URL of the release build for `platform`, skipping the `-debug` archives.
-fn port_asset_url(release: &serde_json::Value, platform: &str) -> Option<String> {
+/// Download URL of the archive for `build`: a platform such as `linux-x86_64`, which skips the
+/// `-debug` archives, or a platform with `-debug` appended.
+fn port_asset_url(release: &serde_json::Value, build: &str) -> Option<String> {
     let assets = release["assets"].as_array()?;
     assets
         .iter()
         .filter_map(|a| Some((a["name"].as_str()?, a["browser_download_url"].as_str()?)))
-        .find(|(name, _)| [".zip", ".tar.gz"].iter().any(|ext| name.ends_with(&format!("-{platform}{ext}"))))
+        .find(|(name, _)| [".zip", ".tar.gz"].iter().any(|ext| name.ends_with(&format!("-{build}{ext}"))))
         .map(|(_, url)| url.to_owned())
 }
 
@@ -245,6 +248,7 @@ mod tests {
             "linux-i686.tar.gz",
             "linux-x86_64-debug.tar.gz",
             "linux-x86_64.tar.gz",
+            "windows-x86_64-debug.zip",
             "windows-x86_64.zip",
         ]
         .iter()
@@ -255,5 +259,7 @@ mod tests {
         assert_eq!(port_asset_url(&release, "linux-i686").as_deref(), Some("https://x/linux-i686.tar.gz"));
         assert_eq!(port_asset_url(&release, "windows-x86_64").as_deref(), Some("https://x/windows-x86_64.zip"));
         assert_eq!(port_asset_url(&release, "windows-i686"), None);
+        assert_eq!(port_asset_url(&release, "linux-x86_64-debug").as_deref(), Some("https://x/linux-x86_64-debug.tar.gz"));
+        assert_eq!(port_asset_url(&release, "windows-x86_64-debug").as_deref(), Some("https://x/windows-x86_64-debug.zip"));
     }
 }

@@ -353,11 +353,11 @@ impl Plan {
             next(progress);
             let platform = self.port_platform()?;
             let dir = match src {
-                PortSource::Release => sources::fetch_port_release(platform, progress)?,
+                PortSource::Release => sources::fetch_port_release(platform, false, progress)?,
                 PortSource::Dir(d) => d.clone(),
                 PortSource::Url(u) => sources::fetch_port_archive(u, progress)?,
             };
-            install_port(&dir, platform, &self.root.join("ts"), progress)?;
+            install_port(&dir, platform, false, &self.root.join("ts"), progress)?;
         }
 
         if titles.is_empty() {
@@ -372,6 +372,7 @@ impl Plan {
 const PORT_REPLACES: &[&str] = &["liblist.gam", "delta.lst", "dlls/mp.dll", "dlls/ts_i386.so", "cl_dlls/client.dll"];
 /// Files only the Rust port brings, removed when going back to the TS 3.0 libraries.
 const PORT_ONLY: &[&str] = &[
+    PORT_DEBUG_MARKER,
     "gameinfo.txt",
     "dlls/ts.so",
     "dlls/ts_amd64.so",
@@ -382,10 +383,12 @@ const PORT_ONLY: &[&str] = &[
 ];
 /// Where the TS 3.0 files the port replaces are kept, inside `ts`.
 const ORIGINALS_DIR: &str = ".tsinstaller-originals";
+/// Present in `ts` when the port's debug build is installed: its files are named like the release's.
+const PORT_DEBUG_MARKER: &str = ".tsinstaller-port-debug";
 
 /// Copies the Rust port for `platform` from `dir` over `ts`, first keeping the TS 3.0 files it
-/// replaces so [`restore_original_libs`] can put them back.
-fn install_port(dir: &Path, platform: &str, ts: &Path, progress: &Progress) -> Result<()> {
+/// replaces so [`restore_original_libs`] can put them back. `debug` says whether it is the debug build.
+fn install_port(dir: &Path, platform: &str, debug: bool, ts: &Path, progress: &Progress) -> Result<()> {
     let port =
         sources::find_port_dir(dir, platform).with_context(|| format!("{} has no Rust port libraries for {platform}", dir.display()))?;
     let originals = ts.join(ORIGINALS_DIR);
@@ -400,6 +403,11 @@ fn install_port(dir: &Path, platform: &str, ts: &Path, progress: &Progress) -> R
     }
     let n = crate::archive::copy_dir(&port, ts, progress)?;
     progress.log(format!("{n} Rust port files copied from {}", port.display()));
+    if debug {
+        std::fs::write(ts.join(PORT_DEBUG_MARKER), "")?;
+    } else {
+        let _ = std::fs::remove_file(ts.join(PORT_DEBUG_MARKER));
+    }
     Ok(())
 }
 
@@ -431,6 +439,10 @@ pub enum LibChoice {
     RustI686,
     /// The Rust port's 64-bit build, for native 64-bit Xash3D.
     RustAmd64,
+    /// [`LibChoice::RustI686`] built with debug info and assertions.
+    RustI686Debug,
+    /// [`LibChoice::RustAmd64`] built with debug info and assertions.
+    RustAmd64Debug,
 }
 
 impl LibChoice {
@@ -439,35 +451,51 @@ impl LibChoice {
             Self::Original => "TS 3.0 original",
             Self::RustI686 => "Rust port (i686)",
             Self::RustAmd64 => "Rust port (amd64)",
+            Self::RustI686Debug => "Rust port (i686, debug)",
+            Self::RustAmd64Debug => "Rust port (amd64, debug)",
         }
+    }
+
+    fn amd64(self) -> bool {
+        matches!(self, Self::RustAmd64 | Self::RustAmd64Debug)
+    }
+
+    fn debug(self) -> bool {
+        matches!(self, Self::RustI686Debug | Self::RustAmd64Debug)
     }
 
     /// What `install` runs now, or `None` when it has no TS game directory.
     pub fn current(install: &Installation) -> Option<Self> {
-        Some(match ts_libs(&install.root.join("ts"))? {
-            TsLibs::Original => Self::Original,
-            TsLibs::RustPort if matches!(install.runtime, Runtime::Xash(b) if b != XashBuild::WindowsI386) => Self::RustAmd64,
-            TsLibs::RustPort => Self::RustI686,
+        let ts = install.root.join("ts");
+        if ts_libs(&ts)? == TsLibs::Original {
+            return Some(Self::Original);
+        }
+        let amd64 = matches!(install.runtime, Runtime::Xash(b) if b != XashBuild::WindowsI386);
+        Some(match (amd64, ts.join(PORT_DEBUG_MARKER).exists()) {
+            (false, false) => Self::RustI686,
+            (true, false) => Self::RustAmd64,
+            (false, true) => Self::RustI686Debug,
+            (true, true) => Self::RustAmd64Debug,
         })
     }
 
     /// The choices `runtime` can switch to: Half-Life only loads 32-bit libraries.
     pub fn available(runtime: Runtime) -> Vec<Self> {
         match runtime {
-            Runtime::GoldSrc => vec![Self::Original, Self::RustI686],
-            Runtime::Xash(_) if XashBuild::native().is_err() => vec![Self::Original, Self::RustI686],
-            Runtime::Xash(_) => vec![Self::Original, Self::RustI686, Self::RustAmd64],
+            Runtime::GoldSrc => vec![Self::Original, Self::RustI686, Self::RustI686Debug],
+            Runtime::Xash(_) if XashBuild::native().is_err() => vec![Self::Original, Self::RustI686, Self::RustI686Debug],
+            Runtime::Xash(_) => vec![Self::Original, Self::RustI686, Self::RustAmd64, Self::RustI686Debug, Self::RustAmd64Debug],
         }
     }
 
     /// The runtime that loads these libraries, for an install that runs `runtime` now. Half-Life
     /// stays as it is; Xash3D switches between the 32-bit Windows build and the native one.
     pub fn runtime(self, runtime: Runtime) -> Result<Runtime> {
-        Ok(match (self, runtime) {
-            (Self::RustAmd64, Runtime::GoldSrc) => bail!("Half-Life only loads 32-bit game libraries"),
-            (_, Runtime::GoldSrc) => Runtime::GoldSrc,
-            (Self::RustAmd64, Runtime::Xash(_)) => Runtime::Xash(XashBuild::native()?),
-            (_, Runtime::Xash(_)) => Runtime::Xash(XashBuild::WindowsI386),
+        Ok(match runtime {
+            Runtime::GoldSrc if self.amd64() => bail!("Half-Life only loads 32-bit game libraries"),
+            Runtime::GoldSrc => Runtime::GoldSrc,
+            Runtime::Xash(_) if self.amd64() => Runtime::Xash(XashBuild::native()?),
+            Runtime::Xash(_) => Runtime::Xash(XashBuild::WindowsI386),
         })
     }
 }
@@ -487,6 +515,7 @@ pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progres
     }
     titles.push(match choice {
         LibChoice::Original => "Restore the TS 3.0 libraries".to_owned(),
+        _ if choice.debug() => format!("Download and install the latest Rust port debug build ({})", runtime.port_platform()),
         _ => format!("Download and install the latest Rust port release ({})", runtime.port_platform()),
     });
     let total = titles.len();
@@ -506,8 +535,8 @@ pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progres
         LibChoice::Original => restore_original_libs(root, progress)?,
         _ => {
             let platform = runtime.port_platform();
-            let dir = sources::fetch_port_release(platform, progress)?;
-            install_port(&dir, platform, &root.join("ts"), progress)?;
+            let dir = sources::fetch_port_release(platform, choice.debug(), progress)?;
+            install_port(&dir, platform, choice.debug(), &root.join("ts"), progress)?;
         }
     }
     progress.log(format!("now running {} on {}", choice.label(), runtime.label()));
@@ -560,6 +589,7 @@ mod tests {
         assert_eq!(LibChoice::RustI686.runtime(Runtime::GoldSrc).unwrap(), Runtime::GoldSrc);
         assert!(LibChoice::RustAmd64.runtime(Runtime::GoldSrc).is_err());
         assert!(!LibChoice::available(Runtime::GoldSrc).contains(&LibChoice::RustAmd64));
+        assert!(LibChoice::RustAmd64Debug.runtime(Runtime::GoldSrc).is_err());
         let native = Runtime::Xash(XashBuild::native().unwrap());
         assert_eq!(LibChoice::Original.runtime(native).unwrap(), Runtime::Xash(XashBuild::WindowsI386));
         assert_eq!(LibChoice::RustI686.runtime(native).unwrap().port_platform(), "windows-i686");
@@ -583,8 +613,10 @@ mod tests {
         write(port.join("dlls/mp.dll"), "rust mp");
         write(port.join("gameinfo.txt"), "game ts");
 
-        install_port(&tmp.join("port"), "windows-i686", &ts, &Progress::silent()).unwrap();
+        install_port(&tmp.join("port"), "windows-i686", true, &ts, &Progress::silent()).unwrap();
         assert_eq!(ts_libs(&ts), Some(TsLibs::RustPort));
+        let install = Installation { root: tmp.join("root"), runtime: Runtime::Xash(XashBuild::WindowsI386) };
+        assert_eq!(LibChoice::current(&install), Some(LibChoice::RustI686Debug));
         assert_eq!(std::fs::read_to_string(ts.join("dlls/mp.dll")).unwrap(), "rust mp");
 
         restore_original_libs(&tmp.join("root"), &Progress::silent()).unwrap();
@@ -592,6 +624,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(ts.join("dlls/mp.dll")).unwrap(), "original mp");
         assert_eq!(std::fs::read_to_string(ts.join("cl_dlls/client.dll")).unwrap(), "original client");
         assert!(!ts.join("gameinfo.txt").exists());
+        assert_eq!(LibChoice::current(&install), Some(LibChoice::Original));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
