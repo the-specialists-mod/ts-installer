@@ -20,7 +20,7 @@ pub const XASH_TS_VALVE_PREFIX: &str = "xash/valve";
 
 /// `ts-3-final.exe` as an asset of this repository's `ts-3.0` release. ModDB, the original
 /// source, sits behind a Cloudflare browser check that rejects scripted downloads.
-pub const TS_RELEASE_URL: &str = "https://github.com/the-specialists-mod/ts-installer/releases/download/ts-3.0/ts-3-final.exe";
+pub const TS_RELEASE_URL: &str = "https://github.com/the-specialists-mod/tsmod-launcher/releases/download/ts-3.0/ts-3-final.exe";
 /// The same file on the Internet Archive, used when the release download fails.
 pub const TS_ARCHIVE_ORG: &str = "https://archive.org/download/ts-3.0/ts-3-final.exe";
 pub const TS_INSTALLER_NAME: &str = "ts-3-final.exe";

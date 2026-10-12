@@ -16,7 +16,7 @@ use anyhow::{Context, Result, ensure};
 pub const GAMEDIR: &str = "ts";
 pub const DEFAULT_PORT: u16 = 27015;
 /// The curated list, kept in this repository.
-pub const CURATED_URL: &str = "https://raw.githubusercontent.com/the-specialists-mod/ts-installer/main/servers.txt";
+pub const CURATED_URL: &str = "https://raw.githubusercontent.com/the-specialists-mod/tsmod-launcher/main/servers.txt";
 /// The copy built into the launcher, used with the downloaded one (which may be newer).
 const CURATED_BUILTIN: &str = include_str!("../servers.txt");
 const FWGS_LIST_URL: &str = "http://xash.su/server-list/v1/servers/";

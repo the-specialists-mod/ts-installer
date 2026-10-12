@@ -1,4 +1,4 @@
-# ts-installer
+# tsmod-launcher
 
 An installer and launcher for **The Specialists 3.0**, built with [GPUI](https://gpui.rs) and
 [gpui-component](https://github.com/longbridge/gpui-component). Runs on Windows and Linux.
@@ -18,7 +18,7 @@ TS itself is `ts-3-final.exe`, the original client installer from
 [ModDB](https://www.moddb.com/mods/the-specialists/downloads/the-specialists-v30-client-windows).
 ModDB sits behind a Cloudflare browser check that rejects scripted downloads, so the launcher
 downloads the copy attached to this repository's
-[`ts-3.0` release](https://github.com/the-specialists-mod/ts-installer/releases/tag/ts-3.0)
+[`ts-3.0` release](https://github.com/the-specialists-mod/tsmod-launcher/releases/tag/ts-3.0)
 (it is too big to commit), falling back to the identical file on the
 [Internet Archive](https://archive.org/details/ts-3.0). Either way the download is checked
 against the known MD5 (`e0fe976a8d9d59393e66b9f1cb94c256`). A local copy works too: the

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use crate::net;
 use crate::progress::Progress;
 
-pub const REPO: &str = "the-specialists-mod/tsmod-installer";
+pub const REPO: &str = "the-specialists-mod/tsmod-launcher";
 /// Set to skip the check on start (any non-empty value).
 pub const DISABLE_ENV: &str = "TSINSTALLER_NO_UPDATE_CHECK";
 
