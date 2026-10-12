@@ -127,8 +127,8 @@ pub fn server_list(found: &mut dyn FnMut(String)) -> Result<bool> {
         })
     };
     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-        if let Some(addr) = line.strip_prefix(PREFIX) {
-            found(addr.trim().to_owned());
+        if let Some(addr) = answer(&line) {
+            found(addr.to_owned());
         }
     }
     let _ = stop.send(());
@@ -145,5 +145,28 @@ pub fn server_list(found: &mut dyn FnMut(String)) -> Result<bool> {
             let last = errors.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output");
             bail!("Steam client query failed ({status}): {last}")
         }
+    }
+}
+
+/// The address in one of the child's `server ADDR` lines. The Steam API's own log doesn't always
+/// end its lines, so the answer may come after some of it.
+fn answer(line: &str) -> Option<&str> {
+    line.rsplit_once(PREFIX).map(|(_, addr)| addr.trim()).filter(|a| !a.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_after_steam_log() {
+        assert_eq!(answer("server 1.2.3.4:27015"), Some("1.2.3.4:27015"));
+        assert_eq!(
+            answer(
+                "10/13 02:09:20 Could not find steamerrorreporter binary. Any minidumps will be uploaded in-processserver 192.236.131.199:27016"
+            ),
+            Some("192.236.131.199:27016")
+        );
+        assert_eq!(answer("Setting breakpad minidump AppID = 70"), None);
     }
 }
