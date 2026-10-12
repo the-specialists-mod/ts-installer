@@ -39,7 +39,7 @@ const LIBRARY: (&str, &[u8]) = ("steam_api64.dll", include_bytes!("../assets/ste
 /// Writes the built-in library to the launcher's directory (in a folder named after its hash, so
 /// another launcher version holding its own copy open doesn't get in the way) and points the
 /// stubs at it.
-fn load() -> Result<()> {
+pub(crate) fn load() -> Result<()> {
     let (name, bytes) = LIBRARY;
     let hash: String = Sha256::digest(bytes)[..6].iter().map(|b| format!("{b:02x}")).collect();
     let dir: PathBuf = crate::store::home().join("steam").join(hash);

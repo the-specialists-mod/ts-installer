@@ -18,6 +18,8 @@ pub mod servers;
 pub mod sources;
 #[cfg(steam_client)]
 pub mod steam;
+#[cfg(steam_client)]
+pub mod steam_broker;
 pub mod store;
 pub mod tsfiles;
 pub mod update;

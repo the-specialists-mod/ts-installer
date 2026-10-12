@@ -97,9 +97,39 @@ pub fn play(install: &Installation, opts: &LaunchOptions) -> Result<Child> {
 }
 
 pub fn launch(install: &Installation, opts: &LaunchOptions, extra: &[String]) -> Result<Child> {
-    let mut cmd = command(install, opts, extra)?;
+    let mut args = steam_broker_args(install);
+    args.extend(extra.iter().cloned());
+    let mut cmd = command(install, opts, &args)?;
     log::info!("launching {cmd:?}");
     cmd.spawn().with_context(|| format!("start {:?}", cmd.get_program()))
+}
+
+/// For Xash3D FWGS, which joins Steam-authenticated GoldSrc servers through a broker: starts one
+/// when Steam is running and has the engine use it. Without Steam, a `steam` ticket generator
+/// left in config.cfg by an earlier run goes back to the engine's default (otherwise the engine
+/// keeps trying to reach a broker that isn't there).
+fn steam_broker_args(install: &Installation) -> Vec<String> {
+    if !matches!(install.runtime, Runtime::Xash(_)) {
+        return Vec::new();
+    }
+    if start_steam_broker() {
+        return vec!["+cl_ticket_generator".into(), "steam".into()];
+    }
+    let config = install.root.join("ts").join("config.cfg");
+    match crate::cfgfile::CfgFile::load(&config).ok().and_then(|c| c.get("cl_ticket_generator")) {
+        Some(g) if g.eq_ignore_ascii_case("steam") => vec!["+cl_ticket_generator".into(), "revemu2013".into()],
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(steam_client)]
+fn start_steam_broker() -> bool {
+    crate::steam_broker::start()
+}
+
+#[cfg(not(steam_client))]
+fn start_steam_broker() -> bool {
+    false
 }
 
 /// `cmd` as one line for display.
