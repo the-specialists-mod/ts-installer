@@ -113,6 +113,7 @@ ts-launcher install --root ~/games/ts --xash \
     --valve-from ~/.local/share/Steam/steamapps/common/Half-Life \
     --ts ~/Downloads/ts-3-final.exe \
     --port                                                        # native Rust port, latest release
+ts-launcher install --root ~/games/ts-debug --xash --port-debug   # the Rust port's debug build
 ts-launcher install --root ~/games/ts-dev --xash \
     --port ~/src/the-specialistsmod-rs/dist                       # Rust port from a local build
 ts-launcher install --root "C:\Program Files (x86)\Steam\steamapps\common\Half-Life" --half-life

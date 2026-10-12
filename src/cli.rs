@@ -17,6 +17,7 @@ usage:
       --ts PATH                     use a local ts-3-final.exe or ts folder instead of downloading
       --port [DIR_OR_URL]           use the Rust port libraries instead of the TS 3.0 originals:
                                     its latest release unless a dist/ folder or archive URL is given
+      --port-debug                  use the debug build of the Rust port's latest release
       --keep-engine | --keep-valve | --keep-ts
                                     keep what the folder already has instead of installing it
   ts-launcher list                  list the registered installations
@@ -77,13 +78,14 @@ fn install(args: &[String]) -> Result<()> {
             "--port" => {
                 let v = it.as_slice().first().filter(|v| !v.starts_with("--")).cloned();
                 libs = GameLibs::RustPort(match v {
-                    None => PortSource::Release,
+                    None => PortSource::Release { debug: false },
                     Some(v) => {
                         it.next();
                         if v.contains("://") { PortSource::Url(v) } else { PortSource::Dir(v.into()) }
                     }
                 });
             }
+            "--port-debug" => libs = GameLibs::RustPort(PortSource::Release { debug: true }),
             _ => bail!("unknown option {arg}\n{USAGE}"),
         }
     }

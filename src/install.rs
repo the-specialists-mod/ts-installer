@@ -57,8 +57,8 @@ pub enum GameLibs {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PortSource {
-    /// The latest release of the port's repository.
-    Release,
+    /// The latest release of the port's repository: its release build, or its `-debug` build.
+    Release { debug: bool },
     /// A local directory: the port's `dist/`, one platform's `ts/`, or a game directory.
     Dir(PathBuf),
     /// A `.zip` or `.tar.gz` with the same layout.
@@ -301,7 +301,8 @@ impl Plan {
         }
         if let GameLibs::RustPort(_) = self.libs {
             steps.push(match self.libs {
-                GameLibs::RustPort(PortSource::Release) => "Download and install the latest Rust port release".into(),
+                GameLibs::RustPort(PortSource::Release { debug: false }) => "Download and install the latest Rust port release".into(),
+                GameLibs::RustPort(PortSource::Release { debug: true }) => "Download and install the latest Rust port debug build".into(),
                 _ => "Install the Rust port libraries".into(),
             });
         }
@@ -353,11 +354,12 @@ impl Plan {
             next(progress);
             let platform = self.port_platform()?;
             let dir = match src {
-                PortSource::Release => sources::fetch_port_release(platform, false, progress)?,
+                PortSource::Release { debug } => sources::fetch_port_release(platform, *debug, progress)?,
                 PortSource::Dir(d) => d.clone(),
                 PortSource::Url(u) => sources::fetch_port_archive(u, progress)?,
             };
-            install_port(&dir, platform, false, &self.root.join("ts"), progress)?;
+            let debug = matches!(src, PortSource::Release { debug: true });
+            install_port(&dir, platform, debug, &self.root.join("ts"), progress)?;
         }
 
         if titles.is_empty() {

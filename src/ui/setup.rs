@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui_kit::base::Disableable;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::radio::{Radio, RadioGroup};
@@ -74,6 +75,8 @@ pub struct Setup {
     ts_path: Option<PathBuf>,
     rust_port: bool,
     port_source: PortChoice,
+    /// Download the latest release's debug build.
+    port_debug: bool,
     port_dir: Option<PathBuf>,
     port_url: Entity<InputState>,
 
@@ -107,6 +110,7 @@ impl Setup {
             ts_path: None,
             rust_port: false,
             port_source: PortChoice::Release,
+            port_debug: false,
             port_dir: None,
             port_url,
             steps: Vec::new(),
@@ -179,7 +183,7 @@ impl Setup {
         };
         let libs = match (self.rust_port, self.port_source) {
             (false, _) => GameLibs::Original,
-            (true, PortChoice::Release) => GameLibs::RustPort(PortSource::Release),
+            (true, PortChoice::Release) => GameLibs::RustPort(PortSource::Release { debug: self.port_debug }),
             (true, PortChoice::Url) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
             (true, PortChoice::Dir) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
         };
@@ -565,10 +569,20 @@ impl Launcher {
                         .child(Radio::new("port-url").label("Download URL (.zip / .tar.gz)")),
                 )
                 .child(match s.port_source {
-                    PortChoice::Release => div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("Downloaded from github.com/{}", sources::PORT_REPO))
+                    PortChoice::Release => h_flex()
+                        .gap_6()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("Downloaded from github.com/{}", sources::PORT_REPO)),
+                        )
+                        .child(Checkbox::new("port-debug").label("Debug build (debug info and assertions)").checked(s.port_debug).on_click(
+                            cx.listener(|this, checked: &bool, _, cx| {
+                                this.setup.port_debug = *checked;
+                                cx.notify();
+                            }),
+                        ))
                         .into_any_element(),
                     PortChoice::Url => h_flex().child(Input::new(&s.port_url)).into_any_element(),
                     PortChoice::Dir => h_flex()
