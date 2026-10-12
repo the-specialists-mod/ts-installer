@@ -58,6 +58,10 @@ from "Start a server" in the server browser. Settings are saved in
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
 interrupted downloads resume.
 
+On start the launcher checks this repository's latest release. When it is newer, a banner asks
+whether to download it; the new build replaces the running one and "Restart now" starts it. Set
+`TSINSTALLER_NO_UPDATE_CHECK=1` to skip the check.
+
 ### Player models
 
 The Player models tab lists `ts/models/player/<name>/` with each model's preview picture and
