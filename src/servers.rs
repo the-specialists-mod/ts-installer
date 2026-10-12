@@ -34,7 +34,7 @@ const LAN_PORTS: std::ops::RangeInclusive<u16> = 27015..=27020;
 const WORKERS: usize = 24;
 
 /// Where a server address came from. A server found several ways has several.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
     Favorite,
     Lan,

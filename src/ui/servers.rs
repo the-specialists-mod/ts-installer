@@ -13,6 +13,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, Textar
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectState};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -65,8 +66,22 @@ struct RowView {
     bots: u8,
     ping: Option<u32>,
     address: String,
+    /// For sorting by source.
     sources: String,
+    source_list: Vec<Source>,
     answered: bool,
+}
+
+/// Steam's logo (Simple Icons, CC0); Lucide has no brand icons.
+const STEAM_ICON: &[u8] = include_bytes!("../../assets/steam.svg");
+
+fn source_icon(source: Source) -> Icon {
+    match source {
+        Source::Favorite => Icon::new(Lucide::Star),
+        Source::Lan => Icon::new(Lucide::Network),
+        Source::List => Icon::new(Lucide::ScrollText),
+        Source::Steam => Icon::default().data(STEAM_ICON),
+    }
 }
 
 const COLUMNS: [(&str, &str, f32); 8] = [
@@ -149,8 +164,10 @@ impl TableDelegate for ServerTable {
         match COLUMNS[col_ix].0 {
             "fav" => {
                 let (tab, addr, on) = (self.tab.clone(), r.addr, r.favorite);
-                div()
+                h_flex()
                     .id(("star", row_ix))
+                    .size_full()
+                    .justify_center()
                     .cursor_pointer()
                     .child(Icon::new(Lucide::Star).small().text_color(if on { cx.theme().warning } else { muted.opacity(0.4) }))
                     .on_click(move |_, _, cx| {
@@ -158,7 +175,9 @@ impl TableDelegate for ServerTable {
                     })
                     .into_any_element()
             }
-            "lock" if r.password => Icon::new(Lucide::Lock).small().text_color(muted).into_any_element(),
+            "lock" if r.password => {
+                h_flex().size_full().justify_center().child(Icon::new(Lucide::Lock).small().text_color(muted)).into_any_element()
+            }
             "lock" => div().into_any_element(),
             "name" if !r.answered => div().text_color(muted).child(text(r.name.clone())).into_any_element(),
             "name" => text(r.name.clone()),
@@ -170,7 +189,16 @@ impl TableDelegate for ServerTable {
             }
             "ping" => text(r.ping.map(|p| format!("{p} ms")).unwrap_or_else(|| "—".into())),
             "address" => div().text_color(muted).child(text(r.address.clone())).into_any_element(),
-            _ => div().text_color(muted).child(text(r.sources.clone())).into_any_element(),
+            _ => h_flex()
+                .h_full()
+                .gap_1p5()
+                .children(r.source_list.iter().enumerate().map(|(i, &s)| {
+                    h_flex()
+                        .id(("source", row_ix * 4 + i))
+                        .child(source_icon(s).small().text_color(muted))
+                        .tooltip(move |window, cx| Tooltip::new(s.label()).build(window, cx))
+                }))
+                .into_any_element(),
         }
     }
 
@@ -485,6 +513,8 @@ impl ServersTab {
             .filter(|r| r.listed())
             .map(|r| {
                 let info = r.info.clone().unwrap_or_default();
+                let mut sources = r.sources.clone();
+                sources.sort();
                 RowView {
                     addr: r.addr,
                     favorite: r.favorite.is_some(),
@@ -500,7 +530,8 @@ impl ServersTab {
                     bots: info.bots,
                     ping: r.ping.map(|p| p.as_millis() as u32),
                     address: r.label.clone(),
-                    sources: r.sources.iter().map(|s| s.label()).collect::<Vec<_>>().join(", "),
+                    sources: sources.iter().map(|s| s.label()).collect::<Vec<_>>().join(", "),
+                    source_list: sources,
                     answered: r.info.is_some(),
                 }
             })
