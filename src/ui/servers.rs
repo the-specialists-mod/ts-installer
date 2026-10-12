@@ -673,7 +673,7 @@ impl ServersTab {
             .text_sm()
             .child(div().text_color(muted).child(
                 "Servers come from the launcher's list (servers.txt in its repository), Xash3D FWGS's list, your LAN, \
-                 your favorites and, with an API key, Steam's master server.",
+                 your favorites and Steam's master server: through Steam when it is running, otherwise with an API key.",
             ))
             .child(
                 h_flex()
@@ -694,7 +694,7 @@ impl ServersTab {
                     .gap_2()
                     .child(div().w(px(130.)).child("Steam API key"))
                     .child(div().flex_1().child(Input::new(&self.steam_key).small().mask_toggle()))
-                    .child(div().text_xs().text_color(muted).child("steamcommunity.com/dev/apikey")),
+                    .child(div().text_xs().text_color(muted).child("Without Steam: steamcommunity.com/dev/apikey")),
             );
 
         let details = match selected {

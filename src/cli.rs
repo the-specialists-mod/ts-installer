@@ -119,6 +119,9 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             Ok(())
         }
+        // Not in USAGE: the server browser runs it to ask the Steam client (see steam.rs).
+        #[cfg(steam_client)]
+        Some(crate::steam::COMMAND) => crate::steam::print_server_list(),
         _ => bail!("{USAGE}"),
     }
 }

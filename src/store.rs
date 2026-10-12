@@ -31,7 +31,8 @@ pub struct Store {
     pub last_used: Option<String>,
     /// Server addresses (`host:port`) saved in the server browser.
     pub favorite_servers: Vec<String>,
-    /// Optional Steam Web API key, for listing servers from Steam's master server.
+    /// Optional Steam Web API key, for listing servers from Steam's master server when the Steam
+    /// client isn't running.
     pub steam_api_key: String,
 }
 
