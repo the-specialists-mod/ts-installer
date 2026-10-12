@@ -871,6 +871,7 @@ impl Render for InstanceView {
                     )),
             )
             .child(metal_bar(selected, cx))
+            .child(self.state.read(cx).update.clone())
             .child(div().flex_1().min_h_0().child(body))
             .into_any_element()
     }

@@ -75,13 +75,24 @@ release doesn't have, like custom maps and models, stay.
 After installing, the launcher shows a play screen with launch options (windowed, console, extra
 arguments, and Wine command / `WINEPREFIX` where relevant). "Start a local server" makes Play host
 a listen server on a chosen map with a number of bots; the game mode, limits and bot skill come
-from "Start a server" in the server browser. Settings are saved in
-`<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
-interrupted downloads resume.
+from "Start a server" in the server browser. Settings are saved in the
+launcher's data directory, `~/.tsinstaller` on Linux and `%APPDATA%\tsinstaller` on Windows
+(`TSINSTALLER_HOME` overrides it), as `installations.json`; downloads are cached in its `cache`
+folder and interrupted downloads resume.
 
 On start the launcher checks this repository's latest release. When it is newer, a banner asks
 whether to download it; the new build replaces the running one and "Restart now" starts it. Set
 `TSINSTALLER_NO_UPDATE_CHECK=1` to skip the check.
+
+### Download cache
+
+Everything the launcher downloads stays in its cache (the data directory's `cache` folder) and is reused by later
+installs, repairs, resets and validation. Before reusing a file it is checked against the
+SHA-256 GitHub publishes for the release asset (the TS installer against its MD5), and a copy
+that no longer matches, because the release was rebuilt (Xash3D FWGS `continuous`) or the file
+is damaged, is downloaded again. When GitHub can't be reached, cached files are used unchecked,
+so installs and repairs work offline once their files are cached. The hard-drive icon at the top
+right lists what is cached, with sizes, and deletes single files or everything.
 
 ### Player models
 

@@ -176,14 +176,65 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Download URL of the release asset `name` in `repo` (`owner/name`) at `tag`.
-pub fn github_asset_url(repo: &str, tag: &str, name: &str) -> Result<String> {
+/// A release asset as the GitHub API describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GithubAsset {
+    pub url: String,
+    /// The SHA-256 GitHub computed when the asset was uploaded, in lowercase hex.
+    pub sha256: Option<String>,
+    pub size: u64,
+}
+
+pub fn github_asset(repo: &str, tag: &str, name: &str) -> Result<GithubAsset> {
     let release = get_json(&format!("https://api.github.com/repos/{repo}/releases/tags/{tag}"))?;
-    release["assets"]
+    let a = release["assets"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|a| a["name"] == name)
-        .and_then(|a| a["browser_download_url"].as_str())
-        .map(str::to_owned)
-        .with_context(|| format!("{repo} release {tag} has no asset {name}"))
+        .with_context(|| format!("{repo} release {tag} has no asset {name}"))?;
+    Ok(GithubAsset {
+        url: a["browser_download_url"].as_str().context("asset without a download URL")?.to_owned(),
+        sha256: a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(str::to_lowercase),
+        size: a["size"].as_u64().unwrap_or(0),
+    })
+}
+
+/// Whether the file at `path` is `asset`: by SHA-256 when the release publishes one, else by size.
+pub fn matches_asset(path: &Path, asset: &GithubAsset) -> Result<bool> {
+    if !path.is_file() {
+        return Ok(false);
+    }
+    Ok(match &asset.sha256 {
+        Some(want) => &file_sha256(path)? == want,
+        None => asset.size > 0 && fs::metadata(path)?.len() == asset.size,
+    })
+}
+
+/// Fetches release asset `name` of `repo` into the cache at `dest`. A cached copy that still
+/// matches the release (its SHA-256) is used as is; a stale or damaged one is downloaded again.
+/// When GitHub can't be reached, a cached copy is used without the check.
+pub fn cached_github_asset(repo: &str, tag: &str, name: &str, dest: &Path, progress: &Progress) -> Result<()> {
+    let asset = match github_asset(repo, tag, name) {
+        Ok(a) => a,
+        Err(e) if dest.is_file() => {
+            progress.log(format!("couldn't check {name} with GitHub ({e:#}); using the cached copy unchecked"));
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    if dest.is_file() {
+        if matches_asset(dest, &asset)? {
+            progress.log(format!("using cached {} (matches the release)", dest.display()));
+            return Ok(());
+        }
+        progress.log(format!("cached {name} differs from the release (rebuilt or damaged), downloading it again"));
+        fs::remove_file(dest)?;
+    }
+    download(&asset.url, dest, None, progress)?;
+    if !matches_asset(dest, &asset)? && asset.sha256.is_some() {
+        let _ = fs::remove_file(dest);
+        bail!("{name}: the download doesn't match the SHA-256 published with the release");
+    }
+    Ok(())
 }

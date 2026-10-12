@@ -1,6 +1,7 @@
 //! Installer and launcher for The Specialists 3.0. The library holds everything but the UI.
 
 pub mod archive;
+pub mod cache;
 pub mod cfgfile;
 pub mod cli;
 pub mod clickteam;
