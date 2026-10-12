@@ -55,6 +55,13 @@ need (32-bit Windows for the originals, native 32-bit for i686, native 64-bit fo
 load 32-bit libraries, so they don't offer amd64. The TS 3.0 files the port replaces are kept in
 `ts/.tsinstaller-originals` and put back when switching to the originals.
 
+The Rust port version can be picked from the port's releases (the latest by default), in the
+wizard, in the overview, or with `--port-version TAG`. Release archives are checked against the
+SHA-256 GitHub publishes for them, and the installed release is recorded in
+`ts/.tsinstaller-port.json`. **Validate** in the overview (or `ts-launcher validate`) compares the
+SHA-256 of every installed port file with the release archive's copy and offers to reinstall the
+release when any differ or are missing.
+
 After installing, the launcher shows a play screen with launch options (windowed, console, extra
 arguments, and Wine command / `WINEPREFIX` where relevant). "Start a local server" makes Play host
 a listen server on a chosen map with a number of bots; the game mode, limits and bot skill come

@@ -155,6 +155,22 @@ pub fn file_md5(path: &Path, progress: &Progress) -> Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
+/// The SHA-256 of `path`, in lowercase hex.
+pub fn file_sha256(path: &Path) -> Result<String> {
+    use sha2::Sha256;
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex(&hasher.finalize()))
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

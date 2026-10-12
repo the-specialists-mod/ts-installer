@@ -20,12 +20,15 @@ usage:
                                     its latest release unless a dist/ folder or archive URL is given
       --32bit                       (xash) with the Rust port, use the 32-bit engine and the port's
                                     i686 libraries instead of 64-bit
-      --port-debug                  use the debug build of the Rust port's latest release
+      --port-version TAG            install that release of the Rust port instead of the latest
+      --port-debug                  use the debug build of that Rust port release
       --keep-engine | --keep-valve | --keep-ts
                                     keep what the folder already has instead of installing it
   ts-launcher list                  list the registered installations
   ts-launcher play [ID]             start an installation (default: the last one used)
-  ts-launcher print-command [ID]    show the command `play` would run";
+  ts-launcher print-command [ID]    show the command `play` would run
+  ts-launcher validate [ID]         compare the SHA-256 of the installed Rust port files with
+                                    the release they came from";
 
 /// Runs the command line in `args` (without the program name).
 pub fn run(args: &[String]) -> Result<()> {
@@ -38,6 +41,31 @@ pub fn run(args: &[String]) -> Result<()> {
                 println!("{mark} {}  {}  {}  {}", i.id, i.name, i.install.runtime.label(), i.install.root.display());
             }
             Ok(())
+        }
+        Some("validate") => {
+            let store = Store::load();
+            let id = args.get(1).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
+            let inst = store.get(&id).with_context(|| format!("no installation {id}"))?;
+            let progress = Progress::new(|e| match e {
+                Event::Step { title, .. } => eprintln!("{title}"),
+                Event::Log(m) => eprintln!("    {m}"),
+                Event::Bytes { .. } => {}
+            });
+            let check = crate::install::validate_port(&inst.install.root, &progress)?;
+            let m = &check.manifest;
+            if check.ok() {
+                println!("ok: all {} files match {} ({})", check.matching, m.tag, m.asset);
+                Ok(())
+            } else {
+                bail!(
+                    "{} of {} files differ from {} ({}): {}",
+                    check.different.len() + check.missing.len(),
+                    check.different.len() + check.missing.len() + check.matching,
+                    m.tag,
+                    m.asset,
+                    check.different.iter().chain(&check.missing).cloned().collect::<Vec<_>>().join(", ")
+                )
+            }
         }
         Some(cmd @ ("play" | "print-command")) => {
             let mut store = Store::load();
@@ -83,7 +111,7 @@ fn install(args: &[String]) -> Result<()> {
             "--port" => {
                 let v = it.as_slice().first().filter(|v| !v.starts_with("--")).cloned();
                 libs = GameLibs::RustPort(match v {
-                    None => PortSource::Release { debug: false },
+                    None => PortSource::Release { tag: None, debug: false },
                     Some(v) => {
                         it.next();
                         if v.contains("://") { PortSource::Url(v) } else { PortSource::Dir(v.into()) }
@@ -91,7 +119,21 @@ fn install(args: &[String]) -> Result<()> {
                 });
             }
             "--32bit" => arch = Arch::I386,
-            "--port-debug" => libs = GameLibs::RustPort(PortSource::Release { debug: true }),
+            "--port-debug" => {
+                libs = match libs {
+                    GameLibs::RustPort(PortSource::Release { tag, .. }) => GameLibs::RustPort(PortSource::Release { tag, debug: true }),
+                    _ => GameLibs::RustPort(PortSource::Release { tag: None, debug: true }),
+                };
+            }
+            "--port-version" => {
+                let tag = value()?;
+                libs = match libs {
+                    GameLibs::RustPort(PortSource::Release { debug, .. }) => {
+                        GameLibs::RustPort(PortSource::Release { tag: Some(tag), debug })
+                    }
+                    _ => GameLibs::RustPort(PortSource::Release { tag: Some(tag), debug: false }),
+                };
+            }
             _ => bail!("unknown option {arg}\n{USAGE}"),
         }
     }

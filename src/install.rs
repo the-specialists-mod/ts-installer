@@ -58,8 +58,9 @@ pub enum GameLibs {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PortSource {
-    /// The latest release of the port's repository: its release build, or its `-debug` build.
-    Release { debug: bool },
+    /// A release of the port's repository (the latest when `tag` is `None`): its release build,
+    /// or its `-debug` build.
+    Release { tag: Option<String>, debug: bool },
     /// A local directory: the port's `dist/`, one platform's `ts/`, or a game directory.
     Dir(PathBuf),
     /// A `.zip` or `.tar.gz` with the same layout.
@@ -314,9 +315,8 @@ impl Plan {
             TsSource::Local(p) => steps.push(format!("Install The Specialists 3.0 from {}", p.display())),
         }
         if let GameLibs::RustPort(_) = self.libs {
-            steps.push(match self.libs {
-                GameLibs::RustPort(PortSource::Release { debug: false }) => "Download and install the latest Rust port release".into(),
-                GameLibs::RustPort(PortSource::Release { debug: true }) => "Download and install the latest Rust port debug build".into(),
+            steps.push(match &self.libs {
+                GameLibs::RustPort(PortSource::Release { tag, debug }) => port_step(tag.as_deref(), *debug, None),
                 _ => "Install the Rust port libraries".into(),
             });
         }
@@ -367,13 +367,15 @@ impl Plan {
         if let GameLibs::RustPort(src) = &self.libs {
             next(progress);
             let platform = self.port_platform()?;
-            let dir = match src {
-                PortSource::Release { debug } => sources::fetch_port_release(platform, *debug, progress)?,
-                PortSource::Dir(d) => d.clone(),
-                PortSource::Url(u) => sources::fetch_port_archive(u, progress)?,
+            let (dir, manifest) = match src {
+                PortSource::Release { tag, debug } => {
+                    let (dir, fetched) = sources::fetch_port_release(platform, tag.as_deref(), *debug, progress)?;
+                    (dir, Some(PortManifest::new(fetched, platform, *debug)))
+                }
+                PortSource::Dir(d) => (d.clone(), None),
+                PortSource::Url(u) => (sources::fetch_port_archive(u, progress)?, None),
             };
-            let debug = matches!(src, PortSource::Release { debug: true });
-            install_port(&dir, platform, debug, &self.root.join("ts"), progress)?;
+            install_port(&dir, platform, manifest.as_ref(), &self.root.join("ts"), progress)?;
         }
 
         if titles.is_empty() {
@@ -388,6 +390,7 @@ impl Plan {
 const PORT_REPLACES: &[&str] = &["liblist.gam", "delta.lst", "dlls/mp.dll", "dlls/ts_i386.so", "cl_dlls/client.dll"];
 /// Files only the Rust port brings, removed when going back to the TS 3.0 libraries.
 const PORT_ONLY: &[&str] = &[
+    PORT_MANIFEST,
     PORT_DEBUG_MARKER,
     "gameinfo.txt",
     "dlls/ts.so",
@@ -401,12 +404,49 @@ const PORT_ONLY: &[&str] = &[
 ];
 /// Where the TS 3.0 files the port replaces are kept, inside `ts`.
 const ORIGINALS_DIR: &str = ".tsinstaller-originals";
-/// Present in `ts` when the port's debug build is installed: its files are named like the release's.
+/// Launcher 0.3 marked the port's debug build with this; [`PORT_MANIFEST`] replaced it.
 const PORT_DEBUG_MARKER: &str = ".tsinstaller-port-debug";
+/// The [`PortManifest`] of the port release in `ts`.
+const PORT_MANIFEST: &str = ".tsinstaller-port.json";
+
+/// Which port release `ts` holds, written when it is installed from a release. The debug and
+/// release builds name their files alike, so this is the only way to tell them apart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortManifest {
+    pub tag: String,
+    /// The release archive the files came from.
+    pub asset: String,
+    /// The archive's SHA-256 as published with the release.
+    pub sha256: Option<String>,
+    pub platform: String,
+    pub debug: bool,
+}
+
+impl PortManifest {
+    fn new(fetched: sources::PortFetched, platform: &str, debug: bool) -> Self {
+        Self { tag: fetched.tag, asset: fetched.asset, sha256: fetched.sha256, platform: platform.to_owned(), debug }
+    }
+}
+
+/// The port release in the game directory `ts`, when it was installed from one.
+pub fn port_manifest(ts: &Path) -> Option<PortManifest> {
+    serde_json::from_str(&std::fs::read_to_string(ts.join(PORT_MANIFEST)).ok()?).ok()
+}
+
+/// "Download and install …" for a port release.
+fn port_step(tag: Option<&str>, debug: bool, platform: Option<&str>) -> String {
+    let release = tag.map(|t| format!("Rust port {t}")).unwrap_or_else(|| "the latest Rust port release".into());
+    let build = if debug { " debug build" } else { "" };
+    match platform {
+        Some(p) => format!("Download and install {release}{build} ({p})"),
+        None => format!("Download and install {release}{build}"),
+    }
+}
 
 /// Copies the Rust port for `platform` from `dir` over `ts`, first keeping the TS 3.0 files it
-/// replaces so [`restore_original_libs`] can put them back. `debug` says whether it is the debug build.
-fn install_port(dir: &Path, platform: &str, debug: bool, ts: &Path, progress: &Progress) -> Result<()> {
+/// replaces so [`restore_original_libs`] can put them back. `manifest` records the release it
+/// came from; without one (a local folder or URL) the record is removed.
+fn install_port(dir: &Path, platform: &str, manifest: Option<&PortManifest>, ts: &Path, progress: &Progress) -> Result<()> {
     let port =
         sources::find_port_dir(dir, platform).with_context(|| format!("{} has no Rust port libraries for {platform}", dir.display()))?;
     let originals = ts.join(ORIGINALS_DIR);
@@ -421,12 +461,68 @@ fn install_port(dir: &Path, platform: &str, debug: bool, ts: &Path, progress: &P
     }
     let n = crate::archive::copy_dir(&port, ts, progress)?;
     progress.log(format!("{n} Rust port files copied from {}", port.display()));
-    if debug {
-        std::fs::write(ts.join(PORT_DEBUG_MARKER), "")?;
-    } else {
-        let _ = std::fs::remove_file(ts.join(PORT_DEBUG_MARKER));
+    let _ = std::fs::remove_file(ts.join(PORT_DEBUG_MARKER));
+    match manifest {
+        Some(m) => std::fs::write(ts.join(PORT_MANIFEST), serde_json::to_string_pretty(m)?)?,
+        None => {
+            let _ = std::fs::remove_file(ts.join(PORT_MANIFEST));
+        }
     }
     Ok(())
+}
+
+/// How the installed port's files compare with the release they came from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortCheck {
+    pub manifest: PortManifest,
+    /// Files whose SHA-256 matches the release archive's copy.
+    pub matching: usize,
+    /// Files that differ from the release, relative to `ts`.
+    pub different: Vec<String>,
+    /// Files the release has that `ts` lacks.
+    pub missing: Vec<String>,
+}
+
+impl PortCheck {
+    pub fn ok(&self) -> bool {
+        self.different.is_empty() && self.missing.is_empty()
+    }
+}
+
+/// Checks the port files in `root/ts` against the release recorded in its manifest: downloads the
+/// release archive (verified against the SHA-256 GitHub publishes for it) and compares the SHA-256
+/// of every file in it with the installed copy.
+pub fn validate_port(root: &Path, progress: &Progress) -> Result<PortCheck> {
+    let ts = root.join("ts");
+    let manifest = port_manifest(&ts).context(
+        "this install doesn't record which Rust port release it has (it predates launcher 0.5 or came from a folder or URL): pick a version to reinstall it",
+    )?;
+    progress.step(0, 2, format!("Download {}", manifest.asset));
+    let release = sources::port_release(Some(&manifest.tag))?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == manifest.asset)
+        .with_context(|| format!("release {} no longer has {}", manifest.tag, manifest.asset))?;
+    let dir = sources::fetch_port_asset(asset, progress)?;
+    let port = sources::find_port_dir(&dir, &manifest.platform).with_context(|| format!("{} has no ts folder", manifest.asset))?;
+    progress.step(1, 2, "Compare SHA-256 of each file");
+    let mut check = PortCheck { manifest, matching: 0, different: Vec::new(), missing: Vec::new() };
+    for rel in crate::archive::list_files(&port)? {
+        let name = rel.to_string_lossy().replace('\\', "/");
+        let installed = ts.join(&rel);
+        if !installed.is_file() {
+            progress.log(format!("missing: {name}"));
+            check.missing.push(name);
+        } else if crate::net::file_sha256(&installed)? == crate::net::file_sha256(&port.join(&rel))? {
+            check.matching += 1;
+        } else {
+            progress.log(format!("differs: {name}"));
+            check.different.push(name);
+        }
+    }
+    progress.log(format!("{} files match {}", check.matching, check.manifest.asset));
+    Ok(check)
 }
 
 /// Puts the TS 3.0 libraries back in `root/ts`: from the copies kept when the port was
@@ -489,7 +585,8 @@ impl LibChoice {
             return Some(Self::Original);
         }
         let amd64 = matches!(install.runtime, Runtime::Xash(b) if b.is_64bit());
-        Some(match (amd64, ts.join(PORT_DEBUG_MARKER).exists()) {
+        let debug = port_manifest(&ts).map(|m| m.debug).unwrap_or_else(|| ts.join(PORT_DEBUG_MARKER).exists());
+        Some(match (amd64, debug) {
             (false, false) => Self::RustI686,
             (true, false) => Self::RustAmd64,
             (false, true) => Self::RustI686Debug,
@@ -521,7 +618,8 @@ impl LibChoice {
 }
 
 /// Switches `install` to the game libraries `choice`, downloading the Xash3D build they need.
-pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progress) -> Result<Installation> {
+/// `tag` picks the port release (the latest when `None`); it also reinstalls the same choice.
+pub fn switch_libs(install: &Installation, choice: LibChoice, tag: Option<&str>, progress: &Progress) -> Result<Installation> {
     let root = &install.root;
     let runtime = choice.runtime(install.runtime)?;
     // The Windows builds share file names, so a changed engine is always downloaded.
@@ -535,8 +633,7 @@ pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progres
     }
     titles.push(match choice {
         LibChoice::Original => "Restore the TS 3.0 libraries".to_owned(),
-        _ if choice.debug() => format!("Download and install the latest Rust port debug build ({})", runtime.port_platform()),
-        _ => format!("Download and install the latest Rust port release ({})", runtime.port_platform()),
+        _ => port_step(tag, choice.debug(), Some(runtime.port_platform())),
     });
     let total = titles.len();
     let mut titles = titles.into_iter().enumerate();
@@ -555,8 +652,10 @@ pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progres
         LibChoice::Original => restore_original_libs(root, progress)?,
         _ => {
             let platform = runtime.port_platform();
-            let dir = sources::fetch_port_release(platform, choice.debug(), progress)?;
-            install_port(&dir, platform, choice.debug(), &root.join("ts"), progress)?;
+            let (dir, fetched) = sources::fetch_port_release(platform, tag, choice.debug(), progress)?;
+            let manifest = PortManifest::new(fetched, platform, choice.debug());
+            install_port(&dir, platform, Some(&manifest), &root.join("ts"), progress)?;
+            progress.log(format!("installed Rust port {}", manifest.tag));
         }
     }
     progress.log(format!("now running {} on {}", choice.label(), runtime.label()));
@@ -634,7 +733,15 @@ mod tests {
         write(port.join("dlls/mp.dll"), "rust mp");
         write(port.join("gameinfo.txt"), "game ts");
 
-        install_port(&tmp.join("port"), "windows-i686", true, &ts, &Progress::silent()).unwrap();
+        let manifest = PortManifest {
+            tag: "v1.0.0".into(),
+            asset: "the-specialists-rs-v1.0.0-windows-i686-debug.zip".into(),
+            sha256: None,
+            platform: "windows-i686".into(),
+            debug: true,
+        };
+        install_port(&tmp.join("port"), "windows-i686", Some(&manifest), &ts, &Progress::silent()).unwrap();
+        assert_eq!(port_manifest(&ts), Some(manifest));
         assert_eq!(ts_libs(&ts), Some(TsLibs::RustPort));
         let install = Installation { root: tmp.join("root"), runtime: Runtime::Xash(XashBuild::WindowsI386) };
         assert_eq!(LibChoice::current(&install), Some(LibChoice::RustI686Debug));
@@ -653,7 +760,7 @@ mod tests {
     fn rust_port_can_use_32_bit_xash() {
         let p = plan(
             Engine::Xash { engine: EngineSource::Download, valve: ValveSource::XashTs, arch: Arch::I386 },
-            GameLibs::RustPort(PortSource::Release { debug: false }),
+            GameLibs::RustPort(PortSource::Release { tag: None, debug: false }),
         );
         let build = if cfg!(windows) { XashBuild::WindowsI386 } else { XashBuild::LinuxI386 };
         assert_eq!(p.xash_build().unwrap(), Some(build));

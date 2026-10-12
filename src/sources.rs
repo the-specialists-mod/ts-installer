@@ -226,42 +226,134 @@ pub fn find_port_dir(dir: &Path, platform: &str) -> Option<PathBuf> {
 /// Fetches a Rust port archive (`.zip` or `.tar.gz`) from `url` and unpacks it into the cache.
 pub fn fetch_port_archive(url: &str, progress: &Progress) -> Result<PathBuf> {
     let name = url.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("port.zip");
-    let cache = net::cache_dir().join("port");
-    let archive = cache.join(name);
+    let archive = net::cache_dir().join("port").join(name);
     let _ = std::fs::remove_file(&archive);
     net::download(url, &archive, None, progress)?;
-    let dir = cache.join("unpacked");
+    unpack_port(&archive, progress)
+}
+
+/// Unpacks a port archive into the cache's `port/unpacked`, replacing what was there.
+fn unpack_port(archive: &Path, progress: &Progress) -> Result<PathBuf> {
+    let name = archive.file_name().unwrap_or_default().to_string_lossy();
+    let dir = net::cache_dir().join("port").join("unpacked");
     let _ = std::fs::remove_dir_all(&dir);
     if name.ends_with(".zip") {
-        crate::archive::extract_zip(&archive, "", &dir, progress)?;
+        crate::archive::extract_zip(archive, "", &dir, progress)?;
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        crate::archive::extract_tar_gz(&archive, &dir, 0, progress)?;
+        crate::archive::extract_tar_gz(archive, &dir, 0, progress)?;
     } else {
         bail!("{name}: expected a .zip or .tar.gz archive");
     }
     Ok(dir)
 }
 
-/// Fetches the Rust port's latest release for `platform` (its `-debug` build when `debug`) and
-/// unpacks it into the cache.
-pub fn fetch_port_release(platform: &str, debug: bool, progress: &Progress) -> Result<PathBuf> {
-    let release = net::get_json(&format!("https://api.github.com/repos/{PORT_REPO}/releases/latest"))?;
-    let tag = release["tag_name"].as_str().unwrap_or("latest");
-    let build = if debug { format!("{platform}-debug") } else { platform.to_owned() };
-    let url = port_asset_url(&release, &build).with_context(|| format!("{PORT_REPO} release {tag} has no {build} archive"))?;
-    progress.log(format!("Rust port {tag} for {build}"));
-    fetch_port_archive(&url, progress)
+/// One release of the Rust port.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortRelease {
+    pub tag: String,
+    pub prerelease: bool,
+    pub assets: Vec<PortAsset>,
 }
 
-/// Download URL of the archive for `build`: a platform such as `linux-x86_64`, which skips the
-/// `-debug` archives, or a platform with `-debug` appended.
-fn port_asset_url(release: &serde_json::Value, build: &str) -> Option<String> {
-    let assets = release["assets"].as_array()?;
-    assets
-        .iter()
-        .filter_map(|a| Some((a["name"].as_str()?, a["browser_download_url"].as_str()?)))
-        .find(|(name, _)| [".zip", ".tar.gz"].iter().any(|ext| name.ends_with(&format!("-{build}{ext}"))))
-        .map(|(_, url)| url.to_owned())
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortAsset {
+    pub name: String,
+    pub url: String,
+    /// The SHA-256 GitHub computed when the archive was uploaded, in lowercase hex.
+    pub sha256: Option<String>,
+}
+
+impl PortRelease {
+    fn from_json(release: &serde_json::Value) -> Option<Self> {
+        let assets = release["assets"]
+            .as_array()?
+            .iter()
+            .filter_map(|a| {
+                Some(PortAsset {
+                    name: a["name"].as_str()?.to_owned(),
+                    url: a["browser_download_url"].as_str()?.to_owned(),
+                    sha256: a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(str::to_lowercase),
+                })
+            })
+            .collect();
+        Some(Self { tag: release["tag_name"].as_str()?.to_owned(), prerelease: release["prerelease"].as_bool().unwrap_or(false), assets })
+    }
+
+    /// The archive for `build`: a platform such as `linux-x86_64`, which skips the `-debug`
+    /// archives, or a platform with `-debug` appended.
+    pub fn asset(&self, build: &str) -> Option<&PortAsset> {
+        self.assets.iter().find(|a| [".zip", ".tar.gz"].iter().any(|ext| a.name.ends_with(&format!("-{build}{ext}"))))
+    }
+}
+
+/// `platform`, or its debug build.
+pub fn port_build(platform: &str, debug: bool) -> String {
+    if debug { format!("{platform}-debug") } else { platform.to_owned() }
+}
+
+/// The port's published releases, newest first.
+pub fn port_releases() -> Result<Vec<PortRelease>> {
+    let list = net::get_json(&format!("https://api.github.com/repos/{PORT_REPO}/releases?per_page=100"))?;
+    Ok(list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .filter_map(PortRelease::from_json)
+        .collect())
+}
+
+/// Release `tag` of the port, or its latest release.
+pub fn port_release(tag: Option<&str>) -> Result<PortRelease> {
+    let url = match tag {
+        Some(t) => format!("https://api.github.com/repos/{PORT_REPO}/releases/tags/{t}"),
+        None => format!("https://api.github.com/repos/{PORT_REPO}/releases/latest"),
+    };
+    let json = net::get_json(&url)?;
+    PortRelease::from_json(&json).with_context(|| format!("{PORT_REPO}: unreadable release from {url}"))
+}
+
+/// Downloads `asset` into the cache (reusing a copy that still matches its digest), checks it
+/// against the digest, and unpacks it.
+pub fn fetch_port_asset(asset: &PortAsset, progress: &Progress) -> Result<PathBuf> {
+    let archive = net::cache_dir().join("port").join(&asset.name);
+    for attempt in 0..2 {
+        net::download(&asset.url, &archive, None, progress)?;
+        let Some(want) = &asset.sha256 else {
+            progress.log(format!("{}: the release publishes no SHA-256, not verified", asset.name));
+            break;
+        };
+        let got = net::file_sha256(&archive)?;
+        if &got == want {
+            progress.log(format!("{}: SHA-256 matches the release ({})", asset.name, &want[..12]));
+            break;
+        }
+        let _ = std::fs::remove_file(&archive);
+        if attempt == 1 {
+            bail!("{}: SHA-256 {got} doesn't match the release's {want}", asset.name);
+        }
+        progress.log(format!("{}: SHA-256 doesn't match the release, downloading again", asset.name));
+    }
+    unpack_port(&archive, progress)
+}
+
+/// What [`fetch_port_release`] fetched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortFetched {
+    pub tag: String,
+    pub asset: String,
+    pub sha256: Option<String>,
+}
+
+/// Fetches release `tag` of the port (the latest when `None`) for `platform`, its `-debug` build
+/// when `debug`, and unpacks it into the cache.
+pub fn fetch_port_release(platform: &str, tag: Option<&str>, debug: bool, progress: &Progress) -> Result<(PathBuf, PortFetched)> {
+    let release = port_release(tag)?;
+    let build = port_build(platform, debug);
+    let asset = release.asset(&build).with_context(|| format!("{PORT_REPO} release {} has no {build} archive", release.tag))?;
+    progress.log(format!("Rust port {} for {build}", release.tag));
+    let dir = fetch_port_asset(asset, progress)?;
+    Ok((dir, PortFetched { tag: release.tag.clone(), asset: asset.name.clone(), sha256: asset.sha256.clone() }))
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {
@@ -286,14 +378,16 @@ mod tests {
             "windows-x86_64.zip",
         ]
         .iter()
-        .map(|p| serde_json::json!({"name": format!("the-specialists-rs-v0.1.0-{p}"), "browser_download_url": format!("https://x/{p}")}))
+        .map(|p| serde_json::json!({"name": format!("the-specialists-rs-v0.1.0-{p}"), "browser_download_url": format!("https://x/{p}"), "digest": "sha256:AB12"}))
         .collect();
-        let release = serde_json::json!({ "assets": assets });
-        assert_eq!(port_asset_url(&release, "linux-x86_64").as_deref(), Some("https://x/linux-x86_64.tar.gz"));
-        assert_eq!(port_asset_url(&release, "linux-i686").as_deref(), Some("https://x/linux-i686.tar.gz"));
-        assert_eq!(port_asset_url(&release, "windows-x86_64").as_deref(), Some("https://x/windows-x86_64.zip"));
-        assert_eq!(port_asset_url(&release, "windows-i686"), None);
-        assert_eq!(port_asset_url(&release, "linux-x86_64-debug").as_deref(), Some("https://x/linux-x86_64-debug.tar.gz"));
-        assert_eq!(port_asset_url(&release, "windows-x86_64-debug").as_deref(), Some("https://x/windows-x86_64-debug.zip"));
+        let release = PortRelease::from_json(&serde_json::json!({ "tag_name": "v0.1.0", "assets": assets })).unwrap();
+        let url = |build: &str| release.asset(build).map(|a| a.url.as_str());
+        assert_eq!(url("linux-x86_64"), Some("https://x/linux-x86_64.tar.gz"));
+        assert_eq!(url("linux-i686"), Some("https://x/linux-i686.tar.gz"));
+        assert_eq!(url("windows-x86_64"), Some("https://x/windows-x86_64.zip"));
+        assert_eq!(url("windows-i686"), None);
+        assert_eq!(url("linux-x86_64-debug"), Some("https://x/linux-x86_64-debug.tar.gz"));
+        assert_eq!(url("windows-x86_64-debug"), Some("https://x/windows-x86_64-debug.zip"));
+        assert_eq!(release.asset("linux-x86_64").unwrap().sha256.as_deref(), Some("ab12"));
     }
 }

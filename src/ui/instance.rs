@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use gpui_kit::assets::IconName as Lucide;
+use gpui_kit::base::Disableable;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
@@ -15,7 +16,7 @@ use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, h_flex, v_f
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use ts_launcher::install::{LibChoice, Runtime, switch_libs, ts_libs};
+use ts_launcher::install::{Installation, LibChoice, PortCheck, Runtime, port_manifest, switch_libs, ts_libs, validate_port};
 use ts_launcher::progress::{Event, Progress};
 use ts_launcher::server_host;
 use ts_launcher::store::Instance;
@@ -109,6 +110,14 @@ pub struct InstanceView {
     /// Put the libraries select back on what is installed, at the next render.
     resync_libs: bool,
     switching: Option<Switching>,
+    /// The Rust port release to install: "Latest release", then each release's tag.
+    versions: Entity<SelectState<Vec<SharedString>>>,
+    /// The tags behind `versions` after its first item.
+    version_tags: Vec<String>,
+    /// Releases fetched in the background, for the next render to put in `versions`.
+    fetched_versions: Option<Vec<String>>,
+    /// After a failed validation: the release to reinstall.
+    repair: Option<String>,
     /// The local server's map and bot count.
     map: Entity<SelectState<Vec<String>>>,
     bots: Entity<InputState>,
@@ -117,15 +126,20 @@ pub struct InstanceView {
 /// Most bots the local server takes (TS servers hold 32 players, one of them you).
 const MAX_BOTS: u32 = 31;
 
-/// A game libraries switch running in the background.
+/// A game libraries switch or port validation running in the background.
 struct Switching {
     title: String,
     bytes: (u64, Option<u64>),
 }
 
+enum JobDone {
+    Installed { install: Installation, message: String },
+    Checked(PortCheck),
+}
+
 enum SwitchMsg {
     Event(Event),
-    Done(Result<ts_launcher::install::Installation, String>),
+    Done(Result<JobDone, String>),
 }
 
 impl EventEmitter<InstanceEvent> for InstanceView {}
@@ -175,6 +189,31 @@ impl InstanceView {
         })
         .detach();
 
+        let installed_tag = port_manifest(&inst.ts_dir()).map(|m| m.tag);
+        let version_tags: Vec<String> = installed_tag.iter().cloned().collect();
+        let labels = version_labels(&version_tags);
+        let versions = cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(version_tags.len())), window, cx));
+        cx.subscribe(&versions, |this, state, e: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(_)) = e else { return };
+            let ix = state.read(cx).selected_index(cx).map(|i| i.row).unwrap_or(0);
+            let tag = ix.checked_sub(1).and_then(|i| this.version_tags.get(i)).cloned();
+            this.install_version(tag, false, cx);
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            let releases = cx.background_executor().spawn(async { ts_launcher::sources::port_releases() }).await;
+            match releases {
+                Ok(r) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.fetched_versions = Some(r.into_iter().map(|r| r.tag).collect());
+                        cx.notify();
+                    });
+                }
+                Err(e) => log::warn!("listing the Rust port releases: {e:#}"),
+            }
+        })
+        .detach();
+
         let lib_choices = LibChoice::available(inst.install.runtime);
         let labels: Vec<SharedString> = lib_choices.iter().map(|c| c.label().into()).collect();
         let current = LibChoice::current(&inst.install).and_then(|c| lib_choices.iter().position(|x| *x == c));
@@ -216,6 +255,10 @@ impl InstanceView {
             libs,
             resync_libs: false,
             switching: None,
+            versions,
+            version_tags,
+            fetched_versions: None,
+            repair: None,
             map,
             bots,
         }
@@ -263,20 +306,67 @@ impl InstanceView {
         });
     }
 
+    /// The release picked in the version select: `None` for the latest.
+    fn selected_tag(&self, cx: &App) -> Option<String> {
+        let ix = self.versions.read(cx).selected_index(cx).map(|i| i.row).unwrap_or(0);
+        ix.checked_sub(1).and_then(|i| self.version_tags.get(i)).cloned()
+    }
+
     fn switch_libs(&mut self, choice: LibChoice, cx: &mut Context<Self>) {
         let Some(inst) = self.instance(cx) else { return };
-        if self.switching.is_some() || LibChoice::current(&inst.install) == Some(choice) {
+        if LibChoice::current(&inst.install) == Some(choice) {
+            return;
+        }
+        let tag = self.selected_tag(cx);
+        self.start_job(format!("Switching to {}", choice.label()), cx, move |progress| {
+            let install = switch_libs(&inst.install, choice, tag.as_deref(), progress)?;
+            let message = format!("Switched to {} on {}", choice.label(), install.runtime.label());
+            Ok(JobDone::Installed { install, message })
+        });
+    }
+
+    /// Installs Rust port release `tag` (the latest when `None`) over the port already installed;
+    /// the same release again only when `force`.
+    fn install_version(&mut self, tag: Option<String>, force: bool, cx: &mut Context<Self>) {
+        let Some(inst) = self.instance(cx) else { return };
+        let Some(choice) = LibChoice::current(&inst.install).filter(|c| *c != LibChoice::Original) else { return };
+        if !force && tag.is_some() && tag == port_manifest(&inst.ts_dir()).map(|m| m.tag) {
+            return;
+        }
+        let name = tag.clone().unwrap_or_else(|| "the latest release".into());
+        self.start_job(format!("Installing Rust port {name}"), cx, move |progress| {
+            let install = switch_libs(&inst.install, choice, tag.as_deref(), progress)?;
+            let installed = port_manifest(&install.root.join("ts")).map(|m| m.tag).unwrap_or(name);
+            Ok(JobDone::Installed { install, message: format!("Installed Rust port {installed} ({})", choice.label()) })
+        });
+    }
+
+    fn validate(&mut self, cx: &mut Context<Self>) {
+        let Some(inst) = self.instance(cx) else { return };
+        self.start_job("Validating the Rust port files".into(), cx, move |progress| {
+            Ok(JobDone::Checked(validate_port(&inst.install.root, progress)?))
+        });
+    }
+
+    fn start_job(
+        &mut self,
+        title: String,
+        cx: &mut Context<Self>,
+        job: impl FnOnce(&Progress) -> anyhow::Result<JobDone> + Send + 'static,
+    ) {
+        if self.switching.is_some() {
             return;
         }
         self.status = None;
-        self.switching = Some(Switching { title: format!("Switching to {}", choice.label()), bytes: (0, None) });
+        self.repair = None;
+        self.switching = Some(Switching { title, bytes: (0, None) });
         let (tx, rx) = async_channel::unbounded();
         let events = tx.clone();
         let progress = Progress::new(move |e| {
             let _ = events.send_blocking(SwitchMsg::Event(e));
         });
         std::thread::spawn(move || {
-            let result = switch_libs(&inst.install, choice, &progress).map_err(|e| format!("{e:#}"));
+            let result = job(&progress).map_err(|e| format!("{e:#}"));
             let _ = tx.send_blocking(SwitchMsg::Done(result));
         });
         cx.spawn(async move |this, cx| {
@@ -285,7 +375,7 @@ impl InstanceView {
                 while let Ok(m) = rx.try_recv() {
                     batch.push(m);
                 }
-                if this.update(cx, |this, cx| batch.into_iter().for_each(|m| this.apply_switch(m, choice, cx))).is_err() {
+                if this.update(cx, |this, cx| batch.into_iter().for_each(|m| this.apply_switch(m, cx))).is_err() {
                     break;
                 }
             }
@@ -294,7 +384,7 @@ impl InstanceView {
         cx.notify();
     }
 
-    fn apply_switch(&mut self, msg: SwitchMsg, choice: LibChoice, cx: &mut Context<Self>) {
+    fn apply_switch(&mut self, msg: SwitchMsg, cx: &mut Context<Self>) {
         match msg {
             SwitchMsg::Event(Event::Step { title, .. }) => {
                 if let Some(s) = &mut self.switching {
@@ -311,15 +401,32 @@ impl InstanceView {
             SwitchMsg::Done(result) => {
                 self.switching = None;
                 match result {
-                    Ok(install) => {
-                        let runtime = install.runtime.label();
+                    Ok(JobDone::Installed { install, message }) => {
                         self.update_instance(cx, |i| i.install = install);
                         if let Some(inst) = self.instance(cx) {
                             self.details = Details::read(&inst);
                         }
-                        self.status = Some(Ok(format!("Switched to {} on {runtime}", choice.label())));
+                        self.status = Some(Ok(message));
                     }
-                    Err(e) => self.status = Some(Err(format!("Could not switch to {}: {e}", choice.label()))),
+                    Ok(JobDone::Checked(check)) => {
+                        let m = &check.manifest;
+                        self.status = Some(if check.ok() {
+                            Ok(format!(
+                                "All {} Rust port files match {} ({}); the archive matched the SHA-256 published with the release.",
+                                check.matching, m.tag, m.asset
+                            ))
+                        } else {
+                            self.repair = Some(m.tag.clone());
+                            let bad: Vec<String> = check
+                                .different
+                                .iter()
+                                .map(|f| format!("{f} (differs)"))
+                                .chain(check.missing.iter().map(|f| format!("{f} (missing)")))
+                                .collect();
+                            Err(format!("{} of the files differ from {} ({}): {}", bad.len(), m.tag, m.asset, bad.join(", ")))
+                        });
+                    }
+                    Err(e) => self.status = Some(Err(e)),
                 }
                 self.resync_libs = true;
             }
@@ -342,6 +449,8 @@ impl InstanceView {
 
     fn render_overview(&mut self, inst: &Instance, cx: &mut Context<Self>) -> AnyElement {
         let d = &self.details;
+        let port_installed = ts_libs(&inst.ts_dir()) == Some(ts_launcher::install::TsLibs::RustPort);
+        let installed = port_manifest(&inst.ts_dir());
         let needs_wine = matches!(inst.install.runtime, Runtime::Xash(b) if b.needs_wine());
         let launch = &inst.launch;
         let play_args = ts_launcher::launch::play_args(&inst.install, launch);
@@ -382,6 +491,48 @@ impl InstanceView {
                                 ),
                             ),
                     )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(
+                                div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Rust port version"),
+                            )
+                            .child(
+                                div()
+                                    .w(px(260.))
+                                    .child(Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some())),
+                            )
+                            .when(port_installed, |r| {
+                                r.child(
+                                    Button::new("validate-port")
+                                        .outline()
+                                        .small()
+                                        .icon(IconName::CircleCheck)
+                                        .label("Validate")
+                                        .disabled(self.switching.is_some())
+                                        .on_click(cx.listener(|this, _, _, cx| this.validate(cx))),
+                                )
+                            })
+                            .when_some(self.repair.clone(), |r, tag| {
+                                r.child(
+                                    Button::new("repair-port")
+                                        .primary()
+                                        .small()
+                                        .label(format!("Reinstall {tag}"))
+                                        .disabled(self.switching.is_some())
+                                        .on_click(cx.listener(move |this, _, _, cx| this.install_version(Some(tag.clone()), true, cx))),
+                                )
+                            }),
+                    )
+                    .child(detail_row(
+                        "",
+                        match (port_installed, &installed) {
+                            (true, Some(m)) => format!("Installed: {} ({})", m.tag, m.asset),
+                            (true, None) => "Installed from a folder or URL, or by an older launcher: no release recorded".into(),
+                            (false, _) => "Used when you switch to the Rust port".into(),
+                        },
+                        cx,
+                    ))
                     .when_some(self.switching.as_ref(), |el, s| {
                         let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
                         el.child(
@@ -501,9 +652,26 @@ impl Render for InstanceView {
         let Some(inst) = self.instance(cx) else {
             return div().into_any_element();
         };
+        if let Some(tags) = self.fetched_versions.take() {
+            self.version_tags = tags;
+            self.resync_libs = true;
+        }
         if std::mem::take(&mut self.resync_libs) {
             let current = LibChoice::current(&inst.install).and_then(|c| self.lib_choices.iter().position(|x| *x == c));
             self.libs.update(cx, |s, cx| s.set_selected_index(current.map(IndexPath::new), window, cx));
+            // Show the installed release, or "Latest release" without one.
+            let installed = port_manifest(&inst.ts_dir()).map(|m| m.tag);
+            if let Some(t) = &installed
+                && !self.version_tags.contains(t)
+            {
+                self.version_tags.push(t.clone());
+            }
+            let ix = installed.and_then(|t| self.version_tags.iter().position(|x| *x == t)).map_or(0, |i| i + 1);
+            let labels = version_labels(&self.version_tags);
+            self.versions.update(cx, |s, cx| {
+                s.set_items(labels, window, cx);
+                s.set_selected_index(Some(IndexPath::new(ix)), window, cx);
+            });
         }
         let selected = TABS.iter().position(|(k, _)| *k == self.tab).unwrap_or(0);
         let (state, id) = (self.state.clone(), self.id.clone());
@@ -588,6 +756,11 @@ fn metal_bar(selected: usize, cx: &mut Context<InstanceView>) -> impl IntoElemen
                 }))
                 .child(label.to_uppercase())
         })))
+}
+
+/// The version select's items: "Latest release", then the tags.
+fn version_labels(tags: &[String]) -> Vec<SharedString> {
+    std::iter::once("Latest release".into()).chain(tags.iter().map(|t| t.clone().into())).collect()
 }
 
 fn dir_size(dir: &Path) -> u64 {

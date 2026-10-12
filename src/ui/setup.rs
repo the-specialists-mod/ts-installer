@@ -12,7 +12,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -80,6 +81,11 @@ pub struct Setup {
     port_source: PortChoice,
     /// Download the latest release's debug build.
     port_debug: bool,
+    /// The release to install: "Latest release", then each tag in `port_tags`.
+    port_versions: Entity<SelectState<Vec<SharedString>>>,
+    port_tags: Vec<String>,
+    /// Releases fetched in the background, for the next render to put in `port_versions`.
+    fetched_port_tags: Option<Vec<String>>,
     port_dir: Option<PathBuf>,
     port_url: Entity<InputState>,
 
@@ -100,6 +106,21 @@ impl Setup {
             }
         })
         .detach();
+        let port_versions = cx.new(|cx| SelectState::new(vec!["Latest release".into()], Some(IndexPath::new(0)), window, cx));
+        cx.observe(&port_versions, |_, _, cx| cx.notify()).detach();
+        cx.spawn(async move |this, cx| {
+            let releases = cx.background_executor().spawn(async { sources::port_releases() }).await;
+            match releases {
+                Ok(r) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.setup.fetched_port_tags = Some(r.into_iter().map(|r| r.tag).collect());
+                        cx.notify();
+                    });
+                }
+                Err(e) => log::warn!("listing the Rust port releases: {e:#}"),
+            }
+        })
+        .detach();
         let mut setup = Self {
             use_xash: false,
             half_life: detected.first().cloned(),
@@ -115,6 +136,9 @@ impl Setup {
             rust_port: false,
             port_source: PortChoice::Release,
             port_debug: false,
+            port_versions,
+            port_tags: Vec::new(),
+            fetched_port_tags: None,
             port_dir: None,
             port_url,
             steps: Vec::new(),
@@ -188,7 +212,11 @@ impl Setup {
         };
         let libs = match (self.rust_port, self.port_source) {
             (false, _) => GameLibs::Original,
-            (true, PortChoice::Release) => GameLibs::RustPort(PortSource::Release { debug: self.port_debug }),
+            (true, PortChoice::Release) => {
+                let ix = self.port_versions.read(cx).selected_index(cx).map(|i| i.row).unwrap_or(0);
+                let tag = ix.checked_sub(1).and_then(|i| self.port_tags.get(i)).cloned();
+                GameLibs::RustPort(PortSource::Release { tag, debug: self.port_debug })
+            }
             (true, PortChoice::Url) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
             (true, PortChoice::Dir) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
         };
@@ -393,7 +421,15 @@ impl Launcher {
         h_flex().gap_2().text_sm().text_color(color).child(Icon::new(IconName::Info).small()).child(text)
     }
 
-    pub(super) fn render_setup(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(tags) = self.setup.fetched_port_tags.take() {
+            let labels: Vec<SharedString> = std::iter::once("Latest release".into()).chain(tags.iter().map(|t| t.clone().into())).collect();
+            self.setup.port_tags = tags;
+            self.setup.port_versions.update(cx, |s, cx| {
+                s.set_items(labels, window, cx);
+                s.set_selected_index(Some(IndexPath::new(0)), window, cx);
+            });
+        }
         let plan = self.setup.plan(cx);
         let problem = plan.validate().err().map(|e| format!("{e:#}"));
         let runtime = plan.runtime().ok();
@@ -591,25 +627,32 @@ impl Launcher {
                             this.setup.port_source = [PortChoice::Release, PortChoice::Dir, PortChoice::Url][*ix];
                             cx.notify();
                         }))
-                        .child(Radio::new("port-release").label("Latest release"))
+                        .child(Radio::new("port-release").label("Release"))
                         .child(Radio::new("port-dir").label("Local folder"))
                         .child(Radio::new("port-url").label("Download URL (.zip / .tar.gz)")),
                 )
                 .child(match s.port_source {
-                    PortChoice::Release => h_flex()
-                        .gap_6()
+                    PortChoice::Release => v_flex()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .gap_4()
+                                .child(div().w(px(200.)).flex_none().child(Select::new(&s.port_versions).id("wizard-port-version").small()))
+                                .child(
+                                    Checkbox::new("port-debug").label("Debug build (debug info and assertions)").checked(s.port_debug).on_click(
+                                        cx.listener(|this, checked: &bool, _, cx| {
+                                            this.setup.port_debug = *checked;
+                                            cx.notify();
+                                        }),
+                                    ),
+                                ),
+                        )
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!("Downloaded from github.com/{}", sources::PORT_REPO)),
+                                .child(format!("Downloaded from github.com/{} and checked against the release's SHA-256", sources::PORT_REPO)),
                         )
-                        .child(Checkbox::new("port-debug").label("Debug build (debug info and assertions)").checked(s.port_debug).on_click(
-                            cx.listener(|this, checked: &bool, _, cx| {
-                                this.setup.port_debug = *checked;
-                                cx.notify();
-                            }),
-                        ))
                         .into_any_element(),
                     PortChoice::Url => h_flex().child(Input::new(&s.port_url)).into_any_element(),
                     PortChoice::Dir => h_flex()
