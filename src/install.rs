@@ -461,6 +461,9 @@ fn install_port(dir: &Path, platform: &str, manifest: Option<&PortManifest>, ts:
     }
     let n = crate::archive::copy_dir(&port, ts, progress)?;
     progress.log(format!("{n} Rust port files copied from {}", port.display()));
+    if dir.starts_with(sources::unpacked_port_dir()) {
+        sources::clear_unpacked_port();
+    }
     let _ = std::fs::remove_file(ts.join(PORT_DEBUG_MARKER));
     match manifest {
         Some(m) => std::fs::write(ts.join(PORT_MANIFEST), serde_json::to_string_pretty(m)?)?,
@@ -521,6 +524,7 @@ pub fn validate_port(root: &Path, progress: &Progress) -> Result<PortCheck> {
             check.different.push(name);
         }
     }
+    sources::clear_unpacked_port();
     progress.log(format!("{} files match {}", check.matching, check.manifest.asset));
     Ok(check)
 }

@@ -15,6 +15,8 @@ pub const FWGS_TAG: &str = "continuous";
 pub const XASH_TS_REPO: &str = "The-Specialists-Archive/xash3d-ts";
 pub const XASH_TS_TAG: &str = "Mod-Download";
 pub const XASH_TS_ASSET: &str = "release.zip";
+/// The name `release.zip` is kept under in the cache.
+pub const XASH_TS_CACHE_NAME: &str = "xash3d-ts-release.zip";
 /// Directory inside `release.zip` that holds the `valve` data.
 pub const XASH_TS_VALVE_PREFIX: &str = "xash/valve";
 
@@ -115,11 +117,9 @@ impl XashBuild {
 
 /// Downloads and unpacks `build` into `root`.
 pub fn install_fwgs(build: XashBuild, root: &Path, progress: &Progress) -> Result<()> {
-    let url = net::github_asset_url(FWGS_REPO, FWGS_TAG, build.asset())?;
     let archive = net::cache_dir().join(build.asset());
-    // `continuous` is rebuilt in place, so never trust a cached copy from an older run.
-    let _ = std::fs::remove_file(&archive);
-    net::download(&url, &archive, None, progress)?;
+    // `continuous` is rebuilt in place: the SHA-256 check notices a newer build.
+    net::cached_github_asset(FWGS_REPO, FWGS_TAG, build.asset(), &archive, progress)?;
     progress.log(format!("unpacking {} into {}", build.asset(), root.display()));
     let n = if build.is_windows() {
         crate::archive::extract_7z(&archive, root, progress)?
@@ -133,9 +133,8 @@ pub fn install_fwgs(build: XashBuild, root: &Path, progress: &Progress) -> Resul
 
 /// Downloads the xash3d-ts release and unpacks its `valve` directory into `root/valve`.
 pub fn install_xash_ts_valve(root: &Path, progress: &Progress) -> Result<()> {
-    let url = net::github_asset_url(XASH_TS_REPO, XASH_TS_TAG, XASH_TS_ASSET)?;
-    let archive = net::cache_dir().join("xash3d-ts-release.zip");
-    net::download(&url, &archive, None, progress)?;
+    let archive = net::cache_dir().join(XASH_TS_CACHE_NAME);
+    net::cached_github_asset(XASH_TS_REPO, XASH_TS_TAG, XASH_TS_ASSET, &archive, progress)?;
     progress.log(format!("unpacking {XASH_TS_VALVE_PREFIX}/ into {}", root.join("valve").display()));
     let n = crate::archive::extract_zip(&archive, XASH_TS_VALVE_PREFIX, &root.join("valve"), progress)?;
     if n == 0 {
@@ -232,10 +231,33 @@ pub fn fetch_port_archive(url: &str, progress: &Progress) -> Result<PathBuf> {
     unpack_port(&archive, progress)
 }
 
+/// Where port archives are unpacked for installing; [`clear_unpacked_port`] removes it after.
+pub fn unpacked_port_dir() -> PathBuf {
+    net::cache_dir().join("port").join("unpacked")
+}
+
+/// Removes the unpacked port files once they are installed or compared.
+pub fn clear_unpacked_port() {
+    let _ = std::fs::remove_dir_all(unpacked_port_dir());
+}
+
+/// The newest cached archive of `build` (e.g. `linux-x86_64-debug`), for installing offline.
+fn cached_port_archive(build: &str, tag: Option<&str>) -> Option<PathBuf> {
+    let dir = net::cache_dir().join("port");
+    let suffix_ok = |n: &str| [".zip", ".tar.gz"].iter().any(|ext| n.ends_with(&format!("-{build}{ext}")));
+    let tag_ok = |n: &str| tag.is_none_or(|t| n.contains(&format!("-{t}-")));
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(|n| suffix_ok(n) && tag_ok(n)))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
+}
+
 /// Unpacks a port archive into the cache's `port/unpacked`, replacing what was there.
 fn unpack_port(archive: &Path, progress: &Progress) -> Result<PathBuf> {
     let name = archive.file_name().unwrap_or_default().to_string_lossy();
-    let dir = net::cache_dir().join("port").join("unpacked");
+    let dir = unpacked_port_dir();
     let _ = std::fs::remove_dir_all(&dir);
     if name.ends_with(".zip") {
         crate::archive::extract_zip(archive, "", &dir, progress)?;
@@ -291,16 +313,27 @@ pub fn port_build(platform: &str, debug: bool) -> String {
     if debug { format!("{platform}-debug") } else { platform.to_owned() }
 }
 
-/// The port's published releases, newest first.
+/// The port's published releases, newest first. Kept for ten minutes: GitHub allows 60 API
+/// requests an hour without a token, and several views ask for the list.
 pub fn port_releases() -> Result<Vec<PortRelease>> {
-    let list = net::get_json(&format!("https://api.github.com/repos/{PORT_REPO}/releases?per_page=100"))?;
-    Ok(list
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<PortRelease>)>> = Mutex::new(None);
+    if let Some((at, list)) = CACHE.lock().unwrap().as_ref()
+        && at.elapsed() < Duration::from_secs(600)
+    {
+        return Ok(list.clone());
+    }
+    let json = net::get_json(&format!("https://api.github.com/repos/{PORT_REPO}/releases?per_page=100"))?;
+    let list: Vec<PortRelease> = json
         .as_array()
         .into_iter()
         .flatten()
         .filter(|r| !r["draft"].as_bool().unwrap_or(false))
         .filter_map(PortRelease::from_json)
-        .collect())
+        .collect();
+    *CACHE.lock().unwrap() = Some((Instant::now(), list.clone()));
+    Ok(list)
 }
 
 /// Release `tag` of the port, or its latest release.
@@ -348,8 +381,19 @@ pub struct PortFetched {
 /// Fetches release `tag` of the port (the latest when `None`) for `platform`, its `-debug` build
 /// when `debug`, and unpacks it into the cache.
 pub fn fetch_port_release(platform: &str, tag: Option<&str>, debug: bool, progress: &Progress) -> Result<(PathBuf, PortFetched)> {
-    let release = port_release(tag)?;
     let build = port_build(platform, debug);
+    let release = match port_release(tag) {
+        Ok(r) => r,
+        Err(e) => {
+            // Offline or rate limited: install a cached archive of this build, unchecked.
+            let archive = cached_port_archive(&build, tag).ok_or(e)?;
+            let name = archive.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let tag = name.trim_start_matches("the-specialists-rs-").split(&format!("-{build}")).next().unwrap_or("?").to_owned();
+            progress.log(format!("couldn't reach GitHub; installing the cached {name} unchecked"));
+            let dir = unpack_port(&archive, progress)?;
+            return Ok((dir, PortFetched { tag, asset: name, sha256: None }));
+        }
+    };
     let asset = release.asset(&build).with_context(|| format!("{PORT_REPO} release {} has no {build} archive", release.tag))?;
     progress.log(format!("Rust port {} for {build}", release.tag));
     let dir = fetch_port_asset(asset, progress)?;

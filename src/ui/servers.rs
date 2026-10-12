@@ -760,21 +760,14 @@ impl ServersTab {
                         }))
                         .into_any_element(),
                 };
-                h_flex()
+                v_flex()
                     .gap_4()
-                    .items_start()
                     .size_full()
                     .child(
                         v_flex()
-                            .w(px(330.))
-                            .flex_none()
                             .gap_1()
                             .text_sm()
-                            .child(div().font_semibold().overflow_hidden().text_ellipsis().whitespace_nowrap().child(if r.info.is_some() {
-                                info.name.clone()
-                            } else {
-                                r.label.clone()
-                            }))
+                            .child(div().font_semibold().child(if r.info.is_some() { info.name.clone() } else { r.label.clone() }))
                             .child(div().text_color(muted).child(if r.label == r.addr.to_string() {
                                 r.label.clone()
                             } else {
@@ -796,6 +789,7 @@ impl ServersTab {
                             .when_some(r.error.clone(), |d, e| d.child(div().text_color(muted).child(e)))
                             .child(
                                 h_flex()
+                                    .flex_wrap()
                                     .gap_2()
                                     .pt_2()
                                     .child(
@@ -819,8 +813,7 @@ impl ServersTab {
                     .child(
                         v_flex()
                             .flex_1()
-                            .h_full()
-                            .min_w_0()
+                            .min_h_0()
                             .gap_1()
                             .child(
                                 h_flex()
@@ -851,8 +844,26 @@ impl ServersTab {
                     Err(e) => Alert::error("servers-status", e).small().into_any_element(),
                 })
             })
-            .child(div().flex_1().min_h(px(120.)).child(DataTable::new(&self.table).stripe(true)))
-            .child(div().h(px(150.)).flex_none().p_3().rounded(cx.theme().radius).border_1().border_color(border).child(details))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h(px(120.))
+                    .items_start()
+                    .gap_3()
+                    .child(div().flex_1().min_w_0().h_full().child(DataTable::new(&self.table).stripe(true)))
+                    .child(
+                        div()
+                            .w(px(330.))
+                            .flex_none()
+                            .h_full()
+                            .p_3()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(border)
+                            .bg(super::theme::panel())
+                            .child(details),
+                    ),
+            )
             .into_any_element()
     }
 

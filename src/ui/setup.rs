@@ -86,6 +86,8 @@ pub struct Setup {
     port_tags: Vec<String>,
     /// Releases fetched in the background, for the next render to put in `port_versions`.
     fetched_port_tags: Option<Vec<String>>,
+    /// The release list has been asked for (on first showing the setup screen).
+    port_tags_requested: bool,
     port_dir: Option<PathBuf>,
     port_url: Entity<InputState>,
 
@@ -108,19 +110,6 @@ impl Setup {
         .detach();
         let port_versions = cx.new(|cx| SelectState::new(vec!["Latest release".into()], Some(IndexPath::new(0)), window, cx));
         cx.observe(&port_versions, |_, _, cx| cx.notify()).detach();
-        cx.spawn(async move |this, cx| {
-            let releases = cx.background_executor().spawn(async { sources::port_releases() }).await;
-            match releases {
-                Ok(r) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.setup.fetched_port_tags = Some(r.into_iter().map(|r| r.tag).collect());
-                        cx.notify();
-                    });
-                }
-                Err(e) => log::warn!("listing the Rust port releases: {e:#}"),
-            }
-        })
-        .detach();
         let mut setup = Self {
             use_xash: false,
             half_life: detected.first().cloned(),
@@ -139,6 +128,7 @@ impl Setup {
             port_versions,
             port_tags: Vec::new(),
             fetched_port_tags: None,
+            port_tags_requested: false,
             port_dir: None,
             port_url,
             steps: Vec::new(),
@@ -422,6 +412,21 @@ impl Launcher {
     }
 
     pub(super) fn render_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !std::mem::replace(&mut self.setup.port_tags_requested, true) {
+            cx.spawn(async move |this, cx| {
+                let releases = cx.background_executor().spawn(async { sources::port_releases() }).await;
+                match releases {
+                    Ok(r) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.setup.fetched_port_tags = Some(r.into_iter().map(|r| r.tag).collect());
+                            cx.notify();
+                        });
+                    }
+                    Err(e) => log::warn!("listing the Rust port releases: {e:#}"),
+                }
+            })
+            .detach();
+        }
         if let Some(tags) = self.setup.fetched_port_tags.take() {
             let labels: Vec<SharedString> = std::iter::once("Latest release".into()).chain(tags.iter().map(|t| t.clone().into())).collect();
             self.setup.port_tags = tags;
