@@ -156,7 +156,8 @@ pub fn ts_libs(ts: &Path) -> Option<TsLibs> {
         return None;
     }
     let liblist = std::fs::read_to_string(ts.join("liblist.gam")).unwrap_or_default();
-    let port = liblist.contains("(Rust)") || ts.join("dlls/ts_amd64.so").is_file() || ts.join("dlls/ts_amd64.dll").is_file();
+    let port =
+        liblist.contains("(Rust)") || ["ts_amd64.so", "mp_amd64.dll", "ts_amd64.dll"].iter().any(|f| ts.join("dlls").join(f).is_file());
     Some(if port { TsLibs::RustPort } else { TsLibs::Original })
 }
 
@@ -391,6 +392,8 @@ const PORT_ONLY: &[&str] = &[
     "gameinfo.txt",
     "dlls/ts.so",
     "dlls/ts_amd64.so",
+    "dlls/mp_amd64.dll",
+    // Port releases before v3.0.1 named the 64-bit Windows server library this.
     "dlls/ts_amd64.dll",
     "cl_dlls/client.so",
     "cl_dlls/client_amd64.so",
