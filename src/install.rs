@@ -387,7 +387,7 @@ impl Plan {
 }
 
 /// TS 3.0 files the Rust port archives replace, relative to `ts`.
-const PORT_REPLACES: &[&str] = &["liblist.gam", "delta.lst", "dlls/mp.dll", "dlls/ts_i386.so", "cl_dlls/client.dll"];
+pub(crate) const PORT_REPLACES: &[&str] = &["liblist.gam", "delta.lst", "dlls/mp.dll", "dlls/ts_i386.so", "cl_dlls/client.dll"];
 /// Files only the Rust port brings, removed when going back to the TS 3.0 libraries.
 const PORT_ONLY: &[&str] = &[
     PORT_MANIFEST,
@@ -403,7 +403,7 @@ const PORT_ONLY: &[&str] = &[
     "cl_dlls/client_amd64.dll",
 ];
 /// Where the TS 3.0 files the port replaces are kept, inside `ts`.
-const ORIGINALS_DIR: &str = ".tsinstaller-originals";
+pub(crate) const ORIGINALS_DIR: &str = ".tsinstaller-originals";
 /// Launcher 0.3 marked the port's debug build with this; [`PORT_MANIFEST`] replaced it.
 const PORT_DEBUG_MARKER: &str = ".tsinstaller-port-debug";
 /// The [`PortManifest`] of the port release in `ts`.

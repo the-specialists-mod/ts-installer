@@ -20,6 +20,7 @@ use ts_launcher::install::{Installation, LibChoice, PortCheck, Runtime, port_man
 use ts_launcher::progress::{Event, Progress};
 use ts_launcher::server_host;
 use ts_launcher::store::Instance;
+use ts_launcher::tsfiles::{self, TsCheck};
 
 use super::controls::ControlsTab;
 use super::gameconfig::GameConfigTab;
@@ -118,6 +119,8 @@ pub struct InstanceView {
     fetched_versions: Option<Vec<String>>,
     /// After a failed validation: the release to reinstall.
     repair: Option<String>,
+    /// Reset was clicked once: ask before doing it.
+    confirm_reset: bool,
     /// The local server's map and bot count.
     map: Entity<SelectState<Vec<String>>>,
     bots: Entity<InputState>,
@@ -135,6 +138,8 @@ struct Switching {
 enum JobDone {
     Installed { install: Installation, message: String },
     Checked(PortCheck),
+    TsChecked(TsCheck),
+    TsRepaired(TsCheck),
 }
 
 enum SwitchMsg {
@@ -259,6 +264,7 @@ impl InstanceView {
             version_tags,
             fetched_versions: None,
             repair: None,
+            confirm_reset: false,
             map,
             bots,
         }
@@ -426,6 +432,24 @@ impl InstanceView {
                             Err(format!("{} of the files differ from {} ({}): {}", bad.len(), m.tag, m.asset, bad.join(", ")))
                         });
                     }
+                    Ok(JobDone::TsChecked(check)) => {
+                        self.status = Some(if check.ok() {
+                            Ok(format!("All {} TS 3.0 files match the release{}", check.matching, settings_note(&check)))
+                        } else {
+                            Err(format!(
+                                "{} damaged or missing: {}. Repair extracts them again from ts-3-final.exe.{}",
+                                files(check.broken().len()),
+                                check.broken().join(", "),
+                                settings_note(&check)
+                            ))
+                        });
+                    }
+                    Ok(JobDone::TsRepaired(check)) => {
+                        self.status = Some(Ok(match check.broken().len() {
+                            0 => format!("Nothing to repair: all {} TS 3.0 files match the release", check.matching),
+                            n => format!("Repaired {}: {}", files(n), check.broken().join(", ")),
+                        }));
+                    }
                     Err(e) => self.status = Some(Err(e)),
                 }
                 self.resync_libs = true;
@@ -451,6 +475,7 @@ impl InstanceView {
         let d = &self.details;
         let port_installed = ts_libs(&inst.ts_dir()) == Some(ts_launcher::install::TsLibs::RustPort);
         let installed = port_manifest(&inst.ts_dir());
+        let busy = self.switching.is_some();
         let needs_wine = matches!(inst.install.runtime, Runtime::Xash(b) if b.needs_wine());
         let launch = &inst.launch;
         let play_args = ts_launcher::launch::play_args(&inst.install, launch);
@@ -541,6 +566,77 @@ impl InstanceView {
                                 .pl(px(152.))
                                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(s.title.clone()))
                                 .child(ProgressBar::new("switch-progress").loading(percent.is_none()).value(percent.unwrap_or(0.))),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("TS 3.0 files"))
+                            .child(
+                                Button::new("validate-ts")
+                                    .outline()
+                                    .small()
+                                    .icon(IconName::CircleCheck)
+                                    .label("Validate")
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let Some(inst) = this.instance(cx) else { return };
+                                        this.start_job("Validating the TS 3.0 files".into(), cx, move |p| {
+                                            Ok(JobDone::TsChecked(tsfiles::validate(&inst.install.root, p)?))
+                                        });
+                                    })),
+                            )
+                            .child(Button::new("repair-ts").outline().small().icon(IconName::Redo).label("Repair").disabled(busy).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    let Some(inst) = this.instance(cx) else { return };
+                                    this.start_job("Repairing the TS 3.0 files".into(), cx, move |p| {
+                                        Ok(JobDone::TsRepaired(tsfiles::repair(&inst.install.root, p)?))
+                                    });
+                                }),
+                            ))
+                            .child(
+                                Button::new("reset-ts")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Undo)
+                                    .label("Reset to TS 3.0…")
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_reset = true;
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .when(self.confirm_reset, |el| {
+                        el.child(
+                            v_flex()
+                                .pl(px(152.))
+                                .gap_2()
+                                .child(div().w_full().text_sm().text_color(cx.theme().warning).child(
+                                    "Reset puts the original TS 3.0 libraries back (with the engine they need) and extracts every \
+                                     release file again, settings included. Custom maps and models stay.",
+                                ))
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(Button::new("reset-cancel").ghost().small().label("Cancel").on_click(cx.listener(
+                                            |this, _, _, cx| {
+                                                this.confirm_reset = false;
+                                                cx.notify();
+                                            },
+                                        )))
+                                        .child(Button::new("reset-confirm").danger().small().label("Reset").on_click(cx.listener(
+                                            |this, _, _, cx| {
+                                                this.confirm_reset = false;
+                                                let Some(inst) = this.instance(cx) else { return };
+                                                this.start_job("Resetting to TS 3.0".into(), cx, move |p| {
+                                                    let install = tsfiles::reset(&inst.install, p)?;
+                                                    let message = format!("Reset to TS 3.0 on {}", install.runtime.label());
+                                                    Ok(JobDone::Installed { install, message })
+                                                });
+                                            },
+                                        ))),
+                                ),
                         )
                     })
                     .child(detail_row("Half-Life data", if d.valve { "valve folder present" } else { "valve folder missing" }, cx))
@@ -756,6 +852,19 @@ fn metal_bar(selected: usize, cx: &mut Context<InstanceView>) -> impl IntoElemen
                 }))
                 .child(label.to_uppercase())
         })))
+}
+
+/// "1 file" or "n files".
+fn files(n: usize) -> String {
+    if n == 1 { "1 file".into() } else { format!("{n} files") }
+}
+
+/// Which settings differ from the release's defaults, as a sentence to append.
+fn settings_note(check: &TsCheck) -> String {
+    match check.settings_changed.as_slice() {
+        [] => String::new(),
+        s => format!(" ({} changed from the defaults, as expected)", s.join(", ")),
+    }
 }
 
 /// The version select's items: "Latest release", then the tags.

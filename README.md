@@ -62,6 +62,16 @@ SHA-256 GitHub publishes for them, and the installed release is recorded in
 SHA-256 of every installed port file with the release archive's copy and offers to reinstall the
 release when any differ or are missing.
 
+The TS 3.0 files can be checked the same way: **Validate** next to "TS 3.0 files" (and
+`ts-launcher validate`) hashes every `ts/` file in `ts-3-final.exe` (itself checked against its
+MD5) and compares it with the installed copy; with the Rust port installed, the TS 3.0 files it
+replaced are checked in `ts/.tsinstaller-originals`. Settings the game and the launcher rewrite
+(`config.cfg`, `server.cfg`, `bots.txt`, …) are reported but not counted as damage.
+**Repair** (`ts-launcher repair`) extracts the damaged and missing files again and leaves
+settings alone. **Reset to TS 3.0** (`ts-launcher reset --yes`) puts the original libraries back,
+with the engine they need, and extracts every release file again, settings included; files the
+release doesn't have, like custom maps and models, stay.
+
 After installing, the launcher shows a play screen with launch options (windowed, console, extra
 arguments, and Wine command / `WINEPREFIX` where relevant). "Start a local server" makes Play host
 a listen server on a chosen map with a number of bots; the game mode, limits and bot skill come

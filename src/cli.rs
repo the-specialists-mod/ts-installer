@@ -27,8 +27,11 @@ usage:
   ts-launcher list                  list the registered installations
   ts-launcher play [ID]             start an installation (default: the last one used)
   ts-launcher print-command [ID]    show the command `play` would run
-  ts-launcher validate [ID]         compare the SHA-256 of the installed Rust port files with
-                                    the release they came from";
+  ts-launcher validate [ID]         compare the SHA-256 of the TS 3.0 files with ts-3-final.exe,
+                                    and of the Rust port files with the release they came from
+  ts-launcher repair [ID]           extract damaged or missing TS 3.0 files again (keeps settings)
+  ts-launcher reset [ID] --yes      back to a clean TS 3.0: original libraries and every release
+                                    file, settings included (custom maps and models stay)";
 
 /// Runs the command line in `args` (without the program name).
 pub fn run(args: &[String]) -> Result<()> {
@@ -42,29 +45,61 @@ pub fn run(args: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        Some("validate") => {
-            let store = Store::load();
-            let id = args.get(1).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
-            let inst = store.get(&id).with_context(|| format!("no installation {id}"))?;
+        Some(cmd @ ("validate" | "repair" | "reset")) => {
+            let mut store = Store::load();
+            let rest: Vec<&String> = args[1..].iter().filter(|a| *a != "--yes").collect();
+            let id = rest.first().map(|s| s.to_string()).or(store.last_used.clone()).context("nothing installed yet")?;
+            let inst = store.get(&id).with_context(|| format!("no installation {id}"))?.clone();
             let progress = Progress::new(|e| match e {
                 Event::Step { title, .. } => eprintln!("{title}"),
                 Event::Log(m) => eprintln!("    {m}"),
                 Event::Bytes { .. } => {}
             });
-            let check = crate::install::validate_port(&inst.install.root, &progress)?;
-            let m = &check.manifest;
-            if check.ok() {
-                println!("ok: all {} files match {} ({})", check.matching, m.tag, m.asset);
-                Ok(())
-            } else {
-                bail!(
-                    "{} of {} files differ from {} ({}): {}",
-                    check.different.len() + check.missing.len(),
-                    check.different.len() + check.missing.len() + check.matching,
-                    m.tag,
-                    m.asset,
-                    check.different.iter().chain(&check.missing).cloned().collect::<Vec<_>>().join(", ")
-                )
+            let root = &inst.install.root;
+            match cmd {
+                "reset" => {
+                    if !args.iter().any(|a| a == "--yes") {
+                        bail!("reset puts the TS 3.0 libraries and every release file back, settings included; run it again with --yes");
+                    }
+                    let install = crate::tsfiles::reset(&inst.install, &progress)?;
+                    println!("reset {} to TS 3.0 ({})", root.display(), install.runtime.label());
+                    if let Some(i) = store.get_mut(&id) {
+                        i.install = install;
+                    }
+                    store.save()?;
+                    Ok(())
+                }
+                "repair" => {
+                    let check = crate::tsfiles::repair(root, &progress)?;
+                    match check.broken().len() {
+                        0 => println!("ok: nothing to repair ({} TS 3.0 files match)", check.matching),
+                        n => println!("repaired {n} TS 3.0 files: {}", check.broken().join(", ")),
+                    }
+                    Ok(())
+                }
+                _ => {
+                    let check = crate::tsfiles::validate(root, &progress)?;
+                    let mut problems = Vec::new();
+                    if check.ok() {
+                        println!("TS 3.0: all {} files match the release", check.matching);
+                    } else {
+                        problems.push(format!("TS 3.0: damaged or missing ({}): {}", check.broken().len(), check.broken().join(", ")));
+                    }
+                    if !check.settings_changed.is_empty() {
+                        println!("TS 3.0: settings changed from the defaults: {}", check.settings_changed.join(", "));
+                    }
+                    if crate::install::port_manifest(&root.join("ts")).is_some() {
+                        let port = crate::install::validate_port(root, &progress)?;
+                        let m = &port.manifest;
+                        if port.ok() {
+                            println!("Rust port: all {} files match {} ({})", port.matching, m.tag, m.asset);
+                        } else {
+                            let bad: Vec<String> = port.different.iter().chain(&port.missing).cloned().collect();
+                            problems.push(format!("Rust port {}: damaged or missing ({}): {}", m.tag, bad.len(), bad.join(", ")));
+                        }
+                    }
+                    if problems.is_empty() { Ok(()) } else { bail!("{}", problems.join("\n")) }
+                }
             }
         }
         Some(cmd @ ("play" | "print-command")) => {
