@@ -41,14 +41,15 @@ pub fn run(args: &[String]) -> Result<()> {
             let id = args.get(1).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
             let inst = store.get(&id).with_context(|| format!("no installation {id}"))?.clone();
             if cmd == "play" {
-                crate::launch::launch(&inst.install, &inst.launch, &[])?;
+                crate::launch::play(&inst.install, &inst.launch)?;
                 if let Some(i) = store.get_mut(&id) {
                     i.last_played = Some(crate::store::now());
                 }
                 store.last_used = Some(id);
                 store.save()?;
             } else {
-                println!("{}", crate::launch::display(&crate::launch::command(&inst.install, &inst.launch, &[])?));
+                let args = crate::launch::play_args(&inst.install, &inst.launch);
+                println!("{}", crate::launch::display(&crate::launch::command(&inst.install, &inst.launch, &args)?));
             }
             Ok(())
         }

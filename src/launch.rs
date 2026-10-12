@@ -6,6 +6,7 @@ use std::process::{Child, Command};
 use anyhow::{Context, Result, bail};
 
 use crate::install::{Installation, Runtime};
+use crate::server_host::{self, BotSupport, HostSettings, ServerKind};
 use crate::store::LaunchOptions;
 
 /// The command that starts TS for `install` with `opts`, followed by `extra` arguments (e.g.
@@ -62,6 +63,37 @@ fn ensure_exists(exe: &Path) -> Result<()> {
         bail!("{} is missing; reinstall", exe.display());
     }
     Ok(())
+}
+
+/// The listen server Play hosts when `opts.local_server` is on: the saved "Start a server"
+/// settings with the launch options' map and bots.
+pub fn local_server(install: &Installation, opts: &LaunchOptions) -> HostSettings {
+    let mut s = HostSettings::load();
+    s.kind = ServerKind::Listen;
+    s.map = match opts.map.as_str() {
+        "" => server_host::default_map(&server_host::maps(&install.root.join("ts"))).unwrap_or_default(),
+        m => m.to_owned(),
+    };
+    s.bots.count = opts.bots;
+    // Leave room for the player.
+    s.max_players = s.max_players.max(opts.bots + 1);
+    s
+}
+
+/// Arguments Play adds after the launch options: the local server's, when it is on.
+pub fn play_args(install: &Installation, opts: &LaunchOptions) -> Vec<String> {
+    if opts.local_server { server_host::listen_args(&local_server(install, opts)) } else { Vec::new() }
+}
+
+/// Starts the game as Play does: with the local server's cfgs written first, when it is on.
+pub fn play(install: &Installation, opts: &LaunchOptions) -> Result<Child> {
+    if opts.local_server {
+        let s = local_server(install, opts);
+        let ts = install.root.join("ts");
+        s.validate(&ts)?;
+        server_host::write_cfgs(&ts, &s, BotSupport::Commands)?;
+    }
+    launch(install, opts, &play_args(install, opts))
 }
 
 pub fn launch(install: &Installation, opts: &LaunchOptions, extra: &[String]) -> Result<Child> {

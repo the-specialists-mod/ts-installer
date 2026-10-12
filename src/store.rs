@@ -63,11 +63,26 @@ pub struct LaunchOptions {
     pub wine: String,
     /// `WINEPREFIX`; empty uses Wine's default.
     pub wine_prefix: String,
+    /// Play hosts a listen server on `map` with `bots`, using the other "Start a server" settings.
+    pub local_server: bool,
+    /// The local server's map; empty picks a default from `ts/maps`.
+    pub map: String,
+    /// Bots that join the local server.
+    pub bots: u32,
 }
 
 impl Default for LaunchOptions {
     fn default() -> Self {
-        Self { windowed: false, console: true, extra_args: String::new(), wine: "wine".into(), wine_prefix: String::new() }
+        Self {
+            windowed: false,
+            console: true,
+            extra_args: String::new(),
+            wine: "wine".into(),
+            wine_prefix: String::new(),
+            local_server: false,
+            map: String::new(),
+            bots: 0,
+        }
     }
 }
 

@@ -220,6 +220,11 @@ pub fn maps(ts: &Path) -> Vec<String> {
     maps
 }
 
+/// The map to offer when none is chosen: `ts_dojo` if installed, else the first map.
+pub fn default_map(maps: &[String]) -> Option<String> {
+    maps.iter().find(|m| *m == "ts_dojo").or(maps.first()).cloned()
+}
+
 /// Bot names from `ts/bots.txt` (one per line; TS reads at most 64, `name//skill` sets a skill).
 pub fn read_bot_names(ts: &Path) -> Vec<String> {
     std::fs::read_to_string(ts.join("bots.txt")).map(|s| parse_bot_names(&s)).unwrap_or_default()

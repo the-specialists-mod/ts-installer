@@ -52,7 +52,9 @@ load 32-bit libraries, so they don't offer amd64. The TS 3.0 files the port repl
 `ts/.tsinstaller-originals` and put back when switching to the originals.
 
 After installing, the launcher shows a play screen with launch options (windowed, console, extra
-arguments, and Wine command / `WINEPREFIX` where relevant). Settings are saved in
+arguments, and Wine command / `WINEPREFIX` where relevant). "Start a local server" makes Play host
+a listen server on a chosen map with a number of bots; the game mode, limits and bot skill come
+from "Start a server" in the server browser. Settings are saved in
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and
 interrupted downloads resume.
 

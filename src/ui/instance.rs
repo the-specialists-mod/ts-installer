@@ -7,7 +7,7 @@ use gpui_kit::assets::IconName as Lucide;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
@@ -17,6 +17,7 @@ use gpui_kit::*;
 
 use ts_launcher::install::{LibChoice, Runtime, switch_libs, ts_libs};
 use ts_launcher::progress::{Event, Progress};
+use ts_launcher::server_host;
 use ts_launcher::store::Instance;
 
 use super::controls::ControlsTab;
@@ -108,7 +109,13 @@ pub struct InstanceView {
     /// Put the libraries select back on what is installed, at the next render.
     resync_libs: bool,
     switching: Option<Switching>,
+    /// The local server's map and bot count.
+    map: Entity<SelectState<Vec<String>>>,
+    bots: Entity<InputState>,
 }
+
+/// Most bots the local server takes (TS servers hold 32 players, one of them you).
+const MAX_BOTS: u32 = 31;
 
 /// A game libraries switch running in the background.
 struct Switching {
@@ -140,6 +147,33 @@ impl InstanceView {
         let extra_args = input(&inst.launch.extra_args, "e.g. +connect 1.2.3.4:27015 -dev 2", window, cx);
         let wine = input(&inst.launch.wine, "wine", window, cx);
         let wine_prefix = input(&inst.launch.wine_prefix, "default (~/.wine)", window, cx);
+        let bots = input(&inst.launch.bots.to_string(), "0", window, cx);
+        cx.subscribe_in(&bots, window, |this, state, e: &NumberInputEvent, window, cx| {
+            let NumberInputEvent::Step(action) = e;
+            let n: u32 = state.read(cx).value().trim().parse().unwrap_or(0);
+            let n = match action {
+                StepAction::Increment => (n + 1).min(MAX_BOTS),
+                StepAction::Decrement => n.saturating_sub(1),
+            };
+            state.update(cx, |s, cx| s.set_value(n.to_string(), window, cx));
+            this.save_inputs(cx);
+        })
+        .detach();
+
+        let maps = server_host::maps(&inst.ts_dir());
+        let map_ix = match inst.launch.map.as_str() {
+            "" => server_host::default_map(&maps).and_then(|m| maps.iter().position(|x| *x == m)),
+            m => maps.iter().position(|x| x == m),
+        };
+        let searchable = maps.len() > 10;
+        let map = cx.new(|cx| SelectState::new(maps, map_ix.map(IndexPath::new), window, cx).searchable(searchable));
+        cx.subscribe(&map, |this, _, e: &SelectEvent<Vec<String>>, cx| {
+            if let SelectEvent::Confirm(Some(m)) = e {
+                let m = m.clone();
+                this.update_instance(cx, |i| i.launch.map = m);
+            }
+        })
+        .detach();
 
         let lib_choices = LibChoice::available(inst.install.runtime);
         let labels: Vec<SharedString> = lib_choices.iter().map(|c| c.label().into()).collect();
@@ -182,6 +216,8 @@ impl InstanceView {
             libs,
             resync_libs: false,
             switching: None,
+            map,
+            bots,
         }
     }
 
@@ -213,7 +249,11 @@ impl InstanceView {
         let extra = self.extra_args.read(cx).value().to_string();
         let wine = self.wine.read(cx).value().to_string();
         let prefix = self.wine_prefix.read(cx).value().to_string();
+        let bots = self.bots.read(cx).value().trim().parse::<u32>().ok().map(|n| n.min(MAX_BOTS));
         self.update_instance(cx, |inst| {
+            if let Some(n) = bots {
+                inst.launch.bots = n;
+            }
             if !name.is_empty() {
                 inst.name = name;
             }
@@ -292,7 +332,10 @@ impl InstanceView {
         let id = self.id.clone();
         self.status = Some(self.state.update(cx, |state, cx| {
             cx.notify();
-            state.launch(&id, &[])
+            if state.game_running() {
+                return Err("The game is already running: quit it first.".to_owned());
+            }
+            state.play(&id)
         }));
         cx.notify();
     }
@@ -301,7 +344,8 @@ impl InstanceView {
         let d = &self.details;
         let needs_wine = matches!(inst.install.runtime, Runtime::Xash(b) if b.needs_wine());
         let launch = &inst.launch;
-        let command = ts_launcher::launch::command(&inst.install, launch, &[]).map(|c| ts_launcher::launch::display(&c));
+        let play_args = ts_launcher::launch::play_args(&inst.install, launch);
+        let command = ts_launcher::launch::command(&inst.install, launch, &play_args).map(|c| ts_launcher::launch::display(&c));
         let engine_extra = match inst.install.runtime {
             Runtime::GoldSrc if cfg!(windows) => "hl.exe".to_owned(),
             Runtime::GoldSrc => "started through Steam".to_owned(),
@@ -370,8 +414,32 @@ impl InstanceView {
                                     let checked = *checked;
                                     this.update_instance(cx, |i| i.launch.console = checked);
                                 },
-                            ))),
+                            )))
+                            .child(Checkbox::new("local-server").label("Start a local server").checked(launch.local_server).on_click(
+                                cx.listener(|this, checked: &bool, _, cx| {
+                                    let checked = *checked;
+                                    this.update_instance(cx, |i| i.launch.local_server = checked);
+                                }),
+                            )),
                     )
+                    .when(launch.local_server, |d| {
+                        d.child(
+                            h_flex()
+                                .gap_3()
+                                .child(div().text_sm().child("Map"))
+                                .child(
+                                    div()
+                                        .w(px(240.))
+                                        .child(Select::new(&self.map).id("local-map").small().placeholder("No maps installed")),
+                                )
+                                .child(div().text_sm().child("Bots"))
+                                .child(div().w(px(110.)).child(NumberInput::new(&self.bots).small())),
+                        )
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                            "Play hosts this map with you in it and the bots joining a few seconds after it loads. \
+                             Game mode, limits and bot skill come from Start a server in the server browser.",
+                        ))
+                    })
                     .child(div().text_sm().child("Extra arguments"))
                     .child(Input::new(&self.extra_args))
                     .when(needs_wine, |d| {

@@ -56,6 +56,17 @@ impl AppState {
     pub fn launch(&mut self, id: &str, extra: &[String]) -> Result<String, String> {
         let inst = self.store.get(id).ok_or("unknown installation")?.clone();
         let child = ts_launcher::launch::launch(&inst.install, &inst.launch, extra).map_err(|e| format!("{e:#}"))?;
+        self.started(id, child)
+    }
+
+    /// Starts installation `id` as its Play button does, hosting its local server if that is on.
+    pub fn play(&mut self, id: &str) -> Result<String, String> {
+        let inst = self.store.get(id).ok_or("unknown installation")?.clone();
+        let child = ts_launcher::launch::play(&inst.install, &inst.launch).map_err(|e| format!("{e:#}"))?;
+        self.started(id, child)
+    }
+
+    fn started(&mut self, id: &str, child: Child) -> Result<String, String> {
         let msg = format!("Started (pid {})", child.id());
         self.game = Some(child);
         if let Some(i) = self.store.get_mut(id) {
