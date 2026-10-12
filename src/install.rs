@@ -90,6 +90,17 @@ pub enum Runtime {
 }
 
 impl Runtime {
+    /// The Rust port's `dist/` platform directory name for libraries this runtime loads.
+    pub fn port_platform(self) -> &'static str {
+        match (self, cfg!(windows)) {
+            (Self::GoldSrc, true) => "windows-i686",
+            (Self::GoldSrc, false) => "linux-i686",
+            (Self::Xash(XashBuild::LinuxAmd64), _) => "linux-x86_64",
+            (Self::Xash(XashBuild::WindowsAmd64), _) => "windows-x86_64",
+            (Self::Xash(XashBuild::WindowsI386), _) => "windows-i686",
+        }
+    }
+
     pub fn label(self) -> String {
         match self {
             Self::GoldSrc => "Half-Life (GoldSrc)".into(),
@@ -200,13 +211,7 @@ impl Plan {
 
     /// The Rust port's `dist/` platform directory name these libraries must come from.
     fn port_platform(&self) -> Result<&'static str> {
-        Ok(match (self.runtime()?, cfg!(windows)) {
-            (Runtime::GoldSrc, true) => "windows-i686",
-            (Runtime::GoldSrc, false) => "linux-i686",
-            (Runtime::Xash(XashBuild::LinuxAmd64), _) => "linux-x86_64",
-            (Runtime::Xash(XashBuild::WindowsAmd64), _) => "windows-x86_64",
-            (Runtime::Xash(XashBuild::WindowsI386), _) => "windows-i686",
-        })
+        Ok(self.runtime()?.port_platform())
     }
 
     /// Problems that stop the plan from running, for the wizard to show before it starts.
@@ -352,10 +357,7 @@ impl Plan {
                 PortSource::Dir(d) => d.clone(),
                 PortSource::Url(u) => sources::fetch_port_archive(u, progress)?,
             };
-            let port = sources::find_port_dir(&dir, platform)
-                .with_context(|| format!("{} has no Rust port libraries for {platform}", dir.display()))?;
-            let n = crate::archive::copy_dir(&port, &self.root.join("ts"), progress)?;
-            progress.log(format!("{n} Rust port files copied from {}", port.display()));
+            install_port(&dir, platform, &self.root.join("ts"), progress)?;
         }
 
         if titles.is_empty() {
@@ -364,6 +366,152 @@ impl Plan {
         progress.log("install complete");
         Ok(Installation { root: self.root.clone(), runtime: self.runtime()? })
     }
+}
+
+/// TS 3.0 files the Rust port archives replace, relative to `ts`.
+const PORT_REPLACES: &[&str] = &["liblist.gam", "delta.lst", "dlls/mp.dll", "dlls/ts_i386.so", "cl_dlls/client.dll"];
+/// Files only the Rust port brings, removed when going back to the TS 3.0 libraries.
+const PORT_ONLY: &[&str] = &[
+    "gameinfo.txt",
+    "dlls/ts.so",
+    "dlls/ts_amd64.so",
+    "dlls/ts_amd64.dll",
+    "cl_dlls/client.so",
+    "cl_dlls/client_amd64.so",
+    "cl_dlls/client_amd64.dll",
+];
+/// Where the TS 3.0 files the port replaces are kept, inside `ts`.
+const ORIGINALS_DIR: &str = ".tsinstaller-originals";
+
+/// Copies the Rust port for `platform` from `dir` over `ts`, first keeping the TS 3.0 files it
+/// replaces so [`restore_original_libs`] can put them back.
+fn install_port(dir: &Path, platform: &str, ts: &Path, progress: &Progress) -> Result<()> {
+    let port =
+        sources::find_port_dir(dir, platform).with_context(|| format!("{} has no Rust port libraries for {platform}", dir.display()))?;
+    let originals = ts.join(ORIGINALS_DIR);
+    if ts_libs(ts) == Some(TsLibs::Original) && !originals.exists() {
+        for rel in crate::archive::list_files(&port)? {
+            if ts.join(&rel).is_file() {
+                std::fs::create_dir_all(originals.join(&rel).parent().unwrap_or(&originals))?;
+                std::fs::copy(ts.join(&rel), originals.join(&rel)).with_context(|| format!("back up {}", rel.display()))?;
+            }
+        }
+        progress.log(format!("kept the TS 3.0 files the port replaces in {}", originals.display()));
+    }
+    let n = crate::archive::copy_dir(&port, ts, progress)?;
+    progress.log(format!("{n} Rust port files copied from {}", port.display()));
+    Ok(())
+}
+
+/// Puts the TS 3.0 libraries back in `root/ts`: from the copies kept when the port was
+/// installed, or else from the TS installer.
+fn restore_original_libs(root: &Path, progress: &Progress) -> Result<()> {
+    let ts = root.join("ts");
+    let originals = ts.join(ORIGINALS_DIR);
+    if originals.is_dir() {
+        let n = crate::archive::copy_dir(&originals, &ts, progress)?;
+        progress.log(format!("{n} TS 3.0 files restored from {}", originals.display()));
+    } else {
+        let installer = sources::download_ts_installer(progress)?;
+        let n = sources::restore_ts_files(&installer, root, PORT_REPLACES, progress)?;
+        progress.log(format!("{n} TS 3.0 files restored from {}", installer.display()));
+    }
+    for f in PORT_ONLY {
+        let _ = std::fs::remove_file(ts.join(f));
+    }
+    Ok(())
+}
+
+/// The game libraries an installation can switch between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibChoice {
+    /// The TS 3.0 originals: 32-bit Windows, or Linux for a Steam server.
+    Original,
+    /// The Rust port's 32-bit build, for Half-Life or 32-bit Xash3D.
+    RustI686,
+    /// The Rust port's 64-bit build, for native 64-bit Xash3D.
+    RustAmd64,
+}
+
+impl LibChoice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "TS 3.0 original",
+            Self::RustI686 => "Rust port (i686)",
+            Self::RustAmd64 => "Rust port (amd64)",
+        }
+    }
+
+    /// What `install` runs now, or `None` when it has no TS game directory.
+    pub fn current(install: &Installation) -> Option<Self> {
+        Some(match ts_libs(&install.root.join("ts"))? {
+            TsLibs::Original => Self::Original,
+            TsLibs::RustPort if matches!(install.runtime, Runtime::Xash(b) if b != XashBuild::WindowsI386) => Self::RustAmd64,
+            TsLibs::RustPort => Self::RustI686,
+        })
+    }
+
+    /// The choices `runtime` can switch to: Half-Life only loads 32-bit libraries.
+    pub fn available(runtime: Runtime) -> Vec<Self> {
+        match runtime {
+            Runtime::GoldSrc => vec![Self::Original, Self::RustI686],
+            Runtime::Xash(_) if XashBuild::native().is_err() => vec![Self::Original, Self::RustI686],
+            Runtime::Xash(_) => vec![Self::Original, Self::RustI686, Self::RustAmd64],
+        }
+    }
+
+    /// The runtime that loads these libraries, for an install that runs `runtime` now. Half-Life
+    /// stays as it is; Xash3D switches between the 32-bit Windows build and the native one.
+    pub fn runtime(self, runtime: Runtime) -> Result<Runtime> {
+        Ok(match (self, runtime) {
+            (Self::RustAmd64, Runtime::GoldSrc) => bail!("Half-Life only loads 32-bit game libraries"),
+            (_, Runtime::GoldSrc) => Runtime::GoldSrc,
+            (Self::RustAmd64, Runtime::Xash(_)) => Runtime::Xash(XashBuild::native()?),
+            (_, Runtime::Xash(_)) => Runtime::Xash(XashBuild::WindowsI386),
+        })
+    }
+}
+
+/// Switches `install` to the game libraries `choice`, downloading the Xash3D build they need.
+pub fn switch_libs(install: &Installation, choice: LibChoice, progress: &Progress) -> Result<Installation> {
+    let root = &install.root;
+    let runtime = choice.runtime(install.runtime)?;
+    // The Windows builds share file names, so a changed engine is always downloaded.
+    let new_engine = match runtime {
+        Runtime::Xash(b) if runtime != install.runtime => Some(b),
+        _ => None,
+    };
+    let mut titles = Vec::new();
+    if let Some(b) = new_engine {
+        titles.push(format!("Install {}", b.label()));
+    }
+    titles.push(match choice {
+        LibChoice::Original => "Restore the TS 3.0 libraries".to_owned(),
+        _ => format!("Download and install the latest Rust port release ({})", runtime.port_platform()),
+    });
+    let total = titles.len();
+    let mut titles = titles.into_iter().enumerate();
+    let mut next = || {
+        if let Some((i, title)) = titles.next() {
+            progress.step(i, total, title);
+        }
+    };
+
+    if let Some(b) = new_engine {
+        next();
+        sources::install_fwgs(b, root, progress)?;
+    }
+    next();
+    match choice {
+        LibChoice::Original => restore_original_libs(root, progress)?,
+        _ => {
+            let platform = runtime.port_platform();
+            let dir = sources::fetch_port_release(platform, progress)?;
+            install_port(&dir, platform, &root.join("ts"), progress)?;
+        }
+    }
+    progress.log(format!("now running {} on {}", choice.label(), runtime.label()));
+    Ok(Installation { root: root.clone(), runtime })
 }
 
 #[cfg(test)]
@@ -405,6 +553,46 @@ mod tests {
         };
         assert!(p.steps().is_empty());
         assert_eq!(p.runtime().unwrap(), Runtime::Xash(XashBuild::WindowsI386));
+    }
+
+    #[test]
+    fn lib_choices_pick_the_engine() {
+        assert_eq!(LibChoice::RustI686.runtime(Runtime::GoldSrc).unwrap(), Runtime::GoldSrc);
+        assert!(LibChoice::RustAmd64.runtime(Runtime::GoldSrc).is_err());
+        assert!(!LibChoice::available(Runtime::GoldSrc).contains(&LibChoice::RustAmd64));
+        let native = Runtime::Xash(XashBuild::native().unwrap());
+        assert_eq!(LibChoice::Original.runtime(native).unwrap(), Runtime::Xash(XashBuild::WindowsI386));
+        assert_eq!(LibChoice::RustI686.runtime(native).unwrap().port_platform(), "windows-i686");
+        assert_eq!(LibChoice::RustAmd64.runtime(Runtime::Xash(XashBuild::WindowsI386)).unwrap(), native);
+    }
+
+    #[test]
+    fn port_install_keeps_the_originals_to_restore() {
+        let tmp = std::env::temp_dir().join(format!("ts-libs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let write = |p: PathBuf, text: &str| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let ts = tmp.join("root/ts");
+        write(ts.join("liblist.gam"), "game \"The Specialists\"");
+        write(ts.join("dlls/mp.dll"), "original mp");
+        write(ts.join("cl_dlls/client.dll"), "original client");
+        let port = tmp.join("port/windows-i686/ts");
+        write(port.join("liblist.gam"), "game \"The Specialists (Rust)\"");
+        write(port.join("dlls/mp.dll"), "rust mp");
+        write(port.join("gameinfo.txt"), "game ts");
+
+        install_port(&tmp.join("port"), "windows-i686", &ts, &Progress::silent()).unwrap();
+        assert_eq!(ts_libs(&ts), Some(TsLibs::RustPort));
+        assert_eq!(std::fs::read_to_string(ts.join("dlls/mp.dll")).unwrap(), "rust mp");
+
+        restore_original_libs(&tmp.join("root"), &Progress::silent()).unwrap();
+        assert_eq!(ts_libs(&ts), Some(TsLibs::Original));
+        assert_eq!(std::fs::read_to_string(ts.join("dlls/mp.dll")).unwrap(), "original mp");
+        assert_eq!(std::fs::read_to_string(ts.join("cl_dlls/client.dll")).unwrap(), "original client");
+        assert!(!ts.join("gameinfo.txt").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -44,6 +44,12 @@ using the archive for your platform. You can instead point the launcher at its `
 install, the `*-i686` libraries are used. On Linux, a Half-Life install with the original DLLs is
 launched through Steam, which needs Proton for it.
 
+An installation's overview can switch its game libraries later between the TS 3.0 originals, the
+Rust port's i686 build and its amd64 build. Xash3D installs get the engine build the libraries
+need (32-bit Windows for the originals and i686, native 64-bit for amd64); Half-Life installs only
+load 32-bit libraries, so they don't offer amd64. The TS 3.0 files the port replaces are kept in
+`ts/.tsinstaller-originals` and put back when switching to the originals.
+
 After installing, the launcher shows a play screen with launch options (windowed, console, extra
 arguments, and Wine command / `WINEPREFIX` where relevant). Settings are saved in
 `<config dir>/ts-launcher/config.json`; downloads are cached in `<cache dir>/ts-launcher/` and

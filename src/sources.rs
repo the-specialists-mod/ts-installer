@@ -155,6 +155,13 @@ pub fn install_ts_from_installer(installer: &Path, root: &Path, progress: &Progr
     Ok(())
 }
 
+/// Unpacks only `files` (paths inside `ts`) from the TS installer into `root`.
+pub fn restore_ts_files(installer: &Path, root: &Path, files: &[&str], progress: &Progress) -> Result<usize> {
+    let wanted: Vec<PathBuf> = files.iter().map(|f| Path::new("ts").join(f)).collect();
+    let mut inst = crate::clickteam::Installer::open(installer)?;
+    inst.extract_all(root, |rel| wanted.iter().any(|w| w == rel), |_, _| progress.check_cancelled())
+}
+
 /// The `ts` game directory inside `dir`: `dir` itself or `dir/ts`.
 pub fn find_ts_dir(dir: &Path) -> Option<PathBuf> {
     [dir.to_path_buf(), dir.join("ts")].into_iter().find(|d| d.join("liblist.gam").is_file() && d.join("dlls").is_dir())

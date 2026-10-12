@@ -220,6 +220,13 @@ pub fn copy_dir(src: &Path, dest: &Path, progress: &Progress) -> Result<usize> {
     Ok(files.len())
 }
 
+/// Paths of every file under `dir`, relative to it.
+pub fn list_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_files(dir, Path::new(""), &mut files)?;
+    Ok(files.into_iter().map(|(rel, _)| rel).collect())
+}
+
 fn collect_files(root: &Path, rel: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<()> {
     let dir = root.join(rel);
     for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {

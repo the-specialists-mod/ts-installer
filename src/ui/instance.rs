@@ -8,13 +8,16 @@ use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, IconName, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use ts_launcher::install::{Runtime, ts_libs};
+use ts_launcher::install::{LibChoice, Runtime, switch_libs, ts_libs};
+use ts_launcher::progress::{Event, Progress};
 use ts_launcher::store::Instance;
 
 use super::controls::ControlsTab;
@@ -100,6 +103,23 @@ pub struct InstanceView {
     models: Option<Entity<ModelsTab>>,
     config: Option<Entity<GameConfigTab>>,
     controls: Option<Entity<ControlsTab>>,
+    /// The game libraries choices offered for this installation's engine.
+    lib_choices: Vec<LibChoice>,
+    libs: Entity<SelectState<Vec<SharedString>>>,
+    /// Put the libraries select back on what is installed, at the next render.
+    resync_libs: bool,
+    switching: Option<Switching>,
+}
+
+/// A game libraries switch running in the background.
+struct Switching {
+    title: String,
+    bytes: (u64, Option<u64>),
+}
+
+enum SwitchMsg {
+    Event(Event),
+    Done(Result<ts_launcher::install::Installation, String>),
 }
 
 impl EventEmitter<InstanceEvent> for InstanceView {}
@@ -121,6 +141,18 @@ impl InstanceView {
         let extra_args = input(&inst.launch.extra_args, "e.g. +connect 1.2.3.4:27015 -dev 2", window, cx);
         let wine = input(&inst.launch.wine, "wine", window, cx);
         let wine_prefix = input(&inst.launch.wine_prefix, "default (~/.wine)", window, cx);
+
+        let lib_choices = LibChoice::available(inst.install.runtime);
+        let labels: Vec<SharedString> = lib_choices.iter().map(|c| c.label().into()).collect();
+        let current = LibChoice::current(&inst.install).and_then(|c| lib_choices.iter().position(|x| *x == c));
+        let libs = cx.new(|cx| SelectState::new(labels, current.map(IndexPath::new), window, cx));
+        cx.subscribe(&libs, |this, _, e: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(label)) = e else { return };
+            if let Some(choice) = this.lib_choices.iter().copied().find(|c| c.label() == label.as_ref()) {
+                this.switch_libs(choice, cx);
+            }
+        })
+        .detach();
 
         let ts = inst.ts_dir();
         cx.spawn(async move |this, cx| {
@@ -147,6 +179,10 @@ impl InstanceView {
             models: None,
             config: None,
             controls: None,
+            lib_choices,
+            libs,
+            resync_libs: false,
+            switching: None,
         }
     }
 
@@ -188,6 +224,70 @@ impl InstanceView {
         });
     }
 
+    fn switch_libs(&mut self, choice: LibChoice, cx: &mut Context<Self>) {
+        let Some(inst) = self.instance(cx) else { return };
+        if self.switching.is_some() || LibChoice::current(&inst.install) == Some(choice) {
+            return;
+        }
+        self.status = None;
+        self.switching = Some(Switching { title: format!("Switching to {}", choice.label()), bytes: (0, None) });
+        let (tx, rx) = async_channel::unbounded();
+        let events = tx.clone();
+        let progress = Progress::new(move |e| {
+            let _ = events.send_blocking(SwitchMsg::Event(e));
+        });
+        std::thread::spawn(move || {
+            let result = switch_libs(&inst.install, choice, &progress).map_err(|e| format!("{e:#}"));
+            let _ = tx.send_blocking(SwitchMsg::Done(result));
+        });
+        cx.spawn(async move |this, cx| {
+            while let Ok(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while let Ok(m) = rx.try_recv() {
+                    batch.push(m);
+                }
+                if this.update(cx, |this, cx| batch.into_iter().for_each(|m| this.apply_switch(m, choice, cx))).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn apply_switch(&mut self, msg: SwitchMsg, choice: LibChoice, cx: &mut Context<Self>) {
+        match msg {
+            SwitchMsg::Event(Event::Step { title, .. }) => {
+                if let Some(s) = &mut self.switching {
+                    s.title = title;
+                    s.bytes = (0, None);
+                }
+            }
+            SwitchMsg::Event(Event::Bytes { done, total }) => {
+                if let Some(s) = &mut self.switching {
+                    s.bytes = (done, total);
+                }
+            }
+            SwitchMsg::Event(Event::Log(_)) => {}
+            SwitchMsg::Done(result) => {
+                self.switching = None;
+                match result {
+                    Ok(install) => {
+                        let runtime = install.runtime.label();
+                        self.update_instance(cx, |i| i.install = install);
+                        if let Some(inst) = self.instance(cx) {
+                            self.details = Details::read(&inst);
+                        }
+                        self.status = Some(Ok(format!("Switched to {} on {runtime}", choice.label())));
+                    }
+                    Err(e) => self.status = Some(Err(format!("Could not switch to {}: {e}", choice.label()))),
+                }
+                self.resync_libs = true;
+            }
+        }
+        cx.notify();
+    }
+
     fn play(&mut self, cx: &mut Context<Self>) {
         self.save_inputs(cx);
         let id = self.id.clone();
@@ -225,7 +325,30 @@ impl InstanceView {
                     .child(detail_row("Folder", inst.install.root.display().to_string(), cx))
                     .child(detail_row("Engine", format!("{} ({engine_extra})", inst.install.runtime.label()), cx))
                     .child(detail_row("Game", if d.game.is_empty() { "—".to_owned() } else { format!("{} {}", d.game, d.version) }, cx))
-                    .child(detail_row("Game libraries", d.libs.clone(), cx))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().w(px(140.)).flex_none().text_sm().text_color(cx.theme().muted_foreground).child("Game libraries"))
+                            .child(
+                                div().w(px(260.)).child(
+                                    Select::new(&self.libs)
+                                        .id("game-libs")
+                                        .small()
+                                        .placeholder(d.libs.clone())
+                                        .disabled(self.switching.is_some()),
+                                ),
+                            ),
+                    )
+                    .when_some(self.switching.as_ref(), |el, s| {
+                        let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
+                        el.child(
+                            v_flex()
+                                .gap_1()
+                                .pl(px(152.))
+                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(s.title.clone()))
+                                .child(ProgressBar::new("switch-progress").loading(percent.is_none()).value(percent.unwrap_or(0.))),
+                        )
+                    })
                     .child(detail_row("Half-Life data", if d.valve { "valve folder present" } else { "valve folder missing" }, cx))
                     .child(detail_row("Content", format!("{} maps, {} player models", d.maps, d.models), cx))
                     .child(detail_row("Size of ts", self.ts_size.map(human_bytes).unwrap_or_else(|| "measuring…".into()), cx))
@@ -311,6 +434,10 @@ impl Render for InstanceView {
         let Some(inst) = self.instance(cx) else {
             return div().into_any_element();
         };
+        if std::mem::take(&mut self.resync_libs) {
+            let current = LibChoice::current(&inst.install).and_then(|c| self.lib_choices.iter().position(|x| *x == c));
+            self.libs.update(cx, |s, cx| s.set_selected_index(current.map(IndexPath::new), window, cx));
+        }
         let selected = TABS.iter().position(|(k, _)| *k == self.tab).unwrap_or(0);
         let (state, id) = (self.state.clone(), self.id.clone());
         let body = match self.tab {
