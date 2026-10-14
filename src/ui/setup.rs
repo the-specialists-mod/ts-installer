@@ -7,11 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gpui_kit::base::Disableable;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -24,6 +25,7 @@ use ts_launcher::{detect, sources};
 use super::{Launcher, Screen, human_bytes, path_text, section};
 
 const LOG_LINES: usize = 300;
+const PORT_LIBS_LABEL: &str = "Rust port";
 
 /// Which path a file dialog fills in.
 #[derive(Clone, Copy)]
@@ -42,25 +44,26 @@ enum ValveChoice {
     Copy,
 }
 
+/// Where the Rust port comes from, in the order of its select.
 #[derive(Clone, Copy, PartialEq)]
 enum PortChoice {
-    Release,
+    Latest,
     Dir,
     Url,
+    Older,
 }
 
-/// One entry of the game libraries select.
-#[derive(Clone, PartialEq)]
-enum LibPick {
-    /// The original DLLs, or the libraries already in a kept ts folder.
-    Original,
-    /// A Rust port release: the latest when `tag` is `None`.
-    Release {
-        tag: Option<String>,
-        debug: bool,
-    },
-    Dir,
-    Url,
+impl PortChoice {
+    const ALL: [Self; 4] = [Self::Latest, Self::Dir, Self::Url, Self::Older];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Latest => "Latest release",
+            Self::Dir => "Local folder",
+            Self::Url => "Download URL (.zip / .tar.gz)",
+            Self::Older => "Older version",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -102,19 +105,20 @@ pub struct Setup {
     ts_path: Option<PathBuf>,
     rust_port: bool,
     /// The game libraries select: the original (or kept) libraries when the engine can load them,
-    /// then every way to get the Rust port. `lib_options` holds what each entry stands for.
-    libs: Entity<SelectState<SearchableVec<SharedString>>>,
-    lib_options: Vec<(SharedString, LibPick)>,
-    /// The entry last shown as selected, so it is only set again when the choice changes (the
-    /// select's indices refer to the filtered list while searching).
-    lib_shown: Option<LibPick>,
+    /// then the Rust port.
+    libs: Entity<SelectState<Vec<SharedString>>>,
+    lib_labels: Vec<SharedString>,
     port_source: PortChoice,
+    port_sources: Entity<SelectState<Vec<SharedString>>>,
     /// Install the release's debug build.
     port_debug: bool,
-    /// The release to install; `None` for the latest.
+    /// The older release to install, picked in `port_versions`.
     port_tag: Option<String>,
+    port_versions: Entity<SelectState<Vec<SharedString>>>,
     /// The port's releases, newest first, once fetched.
     port_tags: Vec<String>,
+    /// The tags `port_versions` currently lists.
+    version_items: Vec<String>,
     /// The release list has been asked for (on first showing the setup screen).
     port_tags_requested: bool,
     port_dir: Option<PathBuf>,
@@ -149,27 +153,35 @@ impl Setup {
             }
         })
         .detach();
-        let libs = cx.new(|cx| SelectState::new(SearchableVec::new(Vec::<SharedString>::new()), None, window, cx).searchable(true));
-        cx.subscribe(&libs, |this, _, e: &SelectEvent<SearchableVec<SharedString>>, cx| {
+        let libs = cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+        cx.subscribe(&libs, |this, _, e: &SelectEvent<Vec<SharedString>>, cx| {
             let SelectEvent::Confirm(Some(label)) = e else { return };
             let s = &mut this.setup;
-            let Some(pick) = s.lib_options.iter().find(|(l, _)| l == label).map(|(_, p)| p.clone()) else { return };
+            let port = label.as_ref() == PORT_LIBS_LABEL;
             // The original DLLs pinned the engine to 32-bit; the port defaults to the native 64-bit build.
-            if pick != LibPick::Original && !s.rust_port && s.use_xash && !s.keep_engine {
+            if port && !s.rust_port && s.use_xash && !s.keep_engine {
                 s.xash_arch = Arch::Amd64;
             }
-            s.rust_port = pick != LibPick::Original;
-            match pick {
-                LibPick::Original => {}
-                LibPick::Release { tag, debug } => {
-                    s.port_source = PortChoice::Release;
-                    s.port_tag = tag;
-                    s.port_debug = debug;
-                }
-                LibPick::Dir => s.port_source = PortChoice::Dir,
-                LibPick::Url => s.port_source = PortChoice::Url,
-            }
+            s.rust_port = port;
             cx.notify();
+        })
+        .detach();
+        let source_labels: Vec<SharedString> = PortChoice::ALL.iter().map(|c| c.label().into()).collect();
+        let port_sources = cx.new(|cx| SelectState::new(source_labels, Some(IndexPath::new(0)), window, cx));
+        cx.subscribe(&port_sources, |this, _, e: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(label)) = e else { return };
+            if let Some(choice) = PortChoice::ALL.into_iter().find(|c| c.label() == label.as_ref()) {
+                this.setup.port_source = choice;
+                cx.notify();
+            }
+        })
+        .detach();
+        let port_versions = cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+        cx.subscribe(&port_versions, |this, _, e: &SelectEvent<Vec<SharedString>>, cx| {
+            if let SelectEvent::Confirm(Some(tag)) = e {
+                this.setup.port_tag = Some(tag.to_string());
+                cx.notify();
+            }
         })
         .detach();
         let mut setup = Self {
@@ -191,12 +203,14 @@ impl Setup {
             ts_path: None,
             rust_port: true,
             libs,
-            lib_options: Vec::new(),
-            lib_shown: None,
-            port_source: PortChoice::Release,
+            lib_labels: Vec::new(),
+            port_source: PortChoice::Latest,
+            port_sources,
             port_debug: false,
             port_tag: None,
+            port_versions,
             port_tags: Vec::new(),
+            version_items: Vec::new(),
             port_tags_requested: false,
             port_dir: None,
             port_url,
@@ -291,38 +305,15 @@ impl Setup {
         }
     }
 
-    /// The game libraries select's entries.
-    fn lib_options(&self) -> Vec<(SharedString, LibPick)> {
-        let mut options = Vec::new();
-        if self.keeping_port() || self.original_allowed() {
-            let original = match (self.ts == TsChoice::Keep, self.existing.ts) {
-                (true, Some(TsLibs::RustPort)) => "Keep the libraries in the ts folder (Rust port)",
-                (true, _) => "Keep the libraries in the ts folder (TS 3.0 original)",
-                (false, _) => "Original TS 3.0 client.dll / mp.dll",
-            };
-            options.push((original.into(), LibPick::Original));
-        }
-        let tags = std::iter::once(None).chain(self.port_tags.iter().cloned().map(Some));
-        for tag in tags {
-            let name = tag.clone().unwrap_or_else(|| "latest release".into());
-            for debug in [false, true] {
-                let label = format!("Rust port {name}{}", if debug { " (debug build)" } else { "" });
-                options.push((label.into(), LibPick::Release { tag: tag.clone(), debug }));
-            }
-        }
-        options.push(("Rust port from a local folder…".into(), LibPick::Dir));
-        options.push(("Rust port from a download URL (.zip / .tar.gz)…".into(), LibPick::Url));
-        options
-    }
-
-    /// The entry matching the current choice.
-    fn lib_pick(&self) -> LibPick {
-        match (self.rust_port, self.port_source) {
-            (false, _) => LibPick::Original,
-            (true, PortChoice::Release) => LibPick::Release { tag: self.port_tag.clone(), debug: self.port_debug },
-            (true, PortChoice::Dir) => LibPick::Dir,
-            (true, PortChoice::Url) => LibPick::Url,
-        }
+    /// The game libraries select's entries: the original or kept libraries if the engine can load
+    /// them, then the Rust port.
+    fn lib_labels(&self) -> Vec<SharedString> {
+        let original = match (self.ts == TsChoice::Keep, self.existing.ts) {
+            (true, Some(TsLibs::RustPort)) => "Keep the libraries in the ts folder (Rust port)",
+            (true, _) => "Keep the libraries in the ts folder (TS 3.0 original)",
+            (false, _) => "Original TS 3.0 client.dll / mp.dll",
+        };
+        (self.keeping_port() || self.original_allowed()).then_some(original.into()).into_iter().chain([PORT_LIBS_LABEL.into()]).collect()
     }
 
     fn plan(&self, cx: &App) -> Plan {
@@ -349,7 +340,8 @@ impl Setup {
         };
         let libs = match (self.rust_port, self.port_source) {
             (false, _) => GameLibs::Original,
-            (true, PortChoice::Release) => GameLibs::RustPort(PortSource::Release { tag: self.port_tag.clone(), debug: self.port_debug }),
+            (true, PortChoice::Latest) => GameLibs::RustPort(PortSource::Release { tag: None, debug: self.port_debug }),
+            (true, PortChoice::Older) => GameLibs::RustPort(PortSource::Release { tag: self.port_tag.clone(), debug: self.port_debug }),
             (true, PortChoice::Url) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
             (true, PortChoice::Dir) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
         };
@@ -578,24 +570,38 @@ impl Launcher {
             .detach();
         }
         self.setup.fix_libs();
-        let options = self.setup.lib_options();
-        let pick = self.setup.lib_pick();
-        let lib_ix = options.iter().position(|(_, p)| *p == pick).unwrap_or(0);
-        let mut resync = false;
-        if options != self.setup.lib_options {
-            let labels: Vec<SharedString> = options.iter().map(|(l, _)| l.clone()).collect();
-            self.setup.lib_options = options;
-            self.setup.libs.update(cx, |st, cx| st.set_items(SearchableVec::new(labels), window, cx));
-            resync = true;
+        let s = &mut self.setup;
+        let labels = s.lib_labels();
+        let lib_ix = if s.rust_port { labels.len() - 1 } else { 0 };
+        if labels != s.lib_labels {
+            s.lib_labels = labels.clone();
+            s.libs.update(cx, |st, cx| st.set_items(labels, window, cx));
         }
-        if resync || self.setup.lib_shown.as_ref() != Some(&pick) {
-            self.setup.libs.update(cx, |st, cx| st.set_selected_index(Some(IndexPath::new(lib_ix)), window, cx));
-            self.setup.lib_shown = Some(pick);
+        if s.libs.read(cx).selected_index(cx).map(|i| i.row) != Some(lib_ix) {
+            s.libs.update(cx, |st, cx| st.set_selected_index(Some(IndexPath::new(lib_ix)), window, cx));
+        }
+        let source_ix = s.port_source as usize;
+        if s.port_sources.read(cx).selected_index(cx).map(|i| i.row) != Some(source_ix) {
+            s.port_sources.update(cx, |st, cx| st.set_selected_index(Some(IndexPath::new(source_ix)), window, cx));
+        }
+        if s.version_items != s.port_tags {
+            s.version_items = s.port_tags.clone();
+            let items: Vec<SharedString> = s.port_tags.iter().map(|t| t.clone().into()).collect();
+            s.port_versions.update(cx, |st, cx| st.set_items(items, window, cx));
+        }
+        if s.port_tag.as_ref().is_none_or(|t| !s.port_tags.contains(t)) {
+            s.port_tag = s.port_tags.first().cloned();
+        }
+        let version_ix = s.port_tag.as_ref().and_then(|t| s.port_tags.iter().position(|x| x == t));
+        if s.port_versions.read(cx).selected_index(cx).map(|i| i.row) != version_ix {
+            s.port_versions.update(cx, |st, cx| st.set_selected_index(version_ix.map(IndexPath::new), window, cx));
         }
         let plan = self.setup.plan(cx);
         let name_problem = self.setup.named_install().and_then(|_| detect::folder_name_problem(&self.setup.install_name_text));
+        let no_version = self.setup.rust_port && self.setup.port_source == PortChoice::Older && self.setup.port_tag.is_none();
         let problem = match name_problem {
             Some(p) => Some(p.to_owned()),
+            None if no_version => Some("the Rust port's releases haven't loaded yet: choose another source or wait".to_owned()),
             None => plan.validate().err().map(|e| format!("{e:#}")),
         };
         let runtime = plan.runtime().ok();
@@ -791,32 +797,55 @@ impl Launcher {
             (false, false, false) => "TS 3.0 has no Linux client: Steam must run Half-Life through Proton.",
             _ => "",
         };
-        let libs = section("Game libraries", "TS 3.0 only shipped a 32-bit Windows client. The Rust port provides native libraries.", cx)
-            .child(div().w(px(420.)).child(Select::new(&s.libs).id("wizard-libs").small()))
-            .when(!s.rust_port && !original_note.is_empty(), |d| {
-                d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
-            })
-            .when(s.rust_port, |d| {
-                d.child(match s.port_source {
-                    PortChoice::Release => div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("Downloaded from github.com/{} and checked against the release's SHA-256", sources::PORT_REPO))
-                        .into_any_element(),
-                    PortChoice::Url => h_flex().w(px(420.)).child(Input::new(&s.port_url)).into_any_element(),
-                    PortChoice::Dir => h_flex()
-                        .gap_2()
-                        .child(path_text(s.port_dir.as_deref(), "No folder selected", cx))
-                        .child(
-                            Button::new("browse-port")
-                                .outline()
-                                .icon(IconName::FolderOpen)
-                                .label("Browse…")
-                                .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::PortDir, true, cx))),
-                        )
-                        .into_any_element(),
+        let libs =
+            section("Game libraries", "TS 3.0 only shipped a 32-bit Windows client. The Rust port provides native libraries.", cx)
+                .child(div().w(px(420.)).child(Select::new(&s.libs).id("wizard-libs").small()))
+                .when(!s.rust_port && !original_note.is_empty(), |d| {
+                    d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
                 })
-            });
+                .when(s.rust_port, |d| {
+                    let release = matches!(s.port_source, PortChoice::Latest | PortChoice::Older);
+                    d.child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().w(px(240.)).flex_none().child(Select::new(&s.port_sources).id("wizard-port-source").small()))
+                            .when(s.port_source == PortChoice::Older, |r| {
+                                r.child(div().w(px(160.)).flex_none().child(
+                                    Select::new(&s.port_versions).id("wizard-port-version").small().placeholder("Loading releases…"),
+                                ))
+                            })
+                            .when(release, |r| {
+                                r.child(
+                                    Checkbox::new("port-debug")
+                                        .label("Debug build (debug info and assertions)")
+                                        .checked(s.port_debug)
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                            this.setup.port_debug = *checked;
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    )
+                    .child(match s.port_source {
+                        PortChoice::Latest | PortChoice::Older => div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("Downloaded from github.com/{} and checked against the release's SHA-256", sources::PORT_REPO))
+                            .into_any_element(),
+                        PortChoice::Url => h_flex().w(px(420.)).child(Input::new(&s.port_url)).into_any_element(),
+                        PortChoice::Dir => h_flex()
+                            .gap_2()
+                            .child(path_text(s.port_dir.as_deref(), "No folder selected", cx))
+                            .child(
+                                Button::new("browse-port")
+                                    .outline()
+                                    .icon(IconName::FolderOpen)
+                                    .label("Browse…")
+                                    .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::PortDir, true, cx))),
+                            )
+                            .into_any_element(),
+                    })
+                });
 
         let steps = plan.steps();
         let summary = section("Summary", "", cx)
