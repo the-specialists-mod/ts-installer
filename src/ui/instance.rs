@@ -18,9 +18,9 @@ use gpui_kit::*;
 
 use ts_launcher::install::{Installation, LibChoice, PortCheck, Runtime, port_manifest, switch_libs, ts_libs, validate_port};
 use ts_launcher::progress::{Event, Progress};
-use ts_launcher::server_host;
 use ts_launcher::store::Instance;
 use ts_launcher::tsfiles::{self, TsCheck};
+use ts_launcher::{hdpack, server_host};
 
 use super::controls::ControlsTab;
 use super::gameconfig::GameConfigTab;
@@ -61,6 +61,8 @@ struct Details {
     valve: bool,
     maps: usize,
     models: usize,
+    /// The HD pack release installed in `ts`.
+    hd_pack: Option<String>,
 }
 
 impl Details {
@@ -85,6 +87,7 @@ impl Details {
             valve: ts_launcher::install::is_half_life_dir(&inst.install.root),
             maps: count(&ts.join("maps"), &|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("bsp"))),
             models: count(&ts.join("models/player"), &|e| e.path().is_dir()),
+            hd_pack: ts_launcher::hdpack::manifest(&ts).map(|m| m.tag),
         }
     }
 }
@@ -140,6 +143,7 @@ enum JobDone {
     Checked(PortCheck),
     TsChecked(TsCheck),
     TsRepaired(TsCheck),
+    HdPack(String),
 }
 
 enum SwitchMsg {
@@ -444,6 +448,12 @@ impl InstanceView {
                             ))
                         });
                     }
+                    Ok(JobDone::HdPack(message)) => {
+                        if let Some(inst) = self.instance(cx) {
+                            self.details = Details::read(&inst);
+                        }
+                        self.status = Some(Ok(message));
+                    }
                     Ok(JobDone::TsRepaired(check)) => {
                         self.status = Some(Ok(match check.broken().len() {
                             0 => format!("Nothing to repair: all {} TS 3.0 files match the release", check.matching),
@@ -651,7 +661,7 @@ impl InstanceView {
                                 .gap_2()
                                 .child(div().w_full().text_sm().text_color(cx.theme().warning).child(
                                     "Reset puts the original TS 3.0 libraries back (with the engine they need) and extracts every \
-                                     release file again, settings included. Custom maps and models stay.",
+                                     release file again, settings included, which also undoes the HD pack. Custom maps and models stay.",
                                 ))
                                 .child(
                                     h_flex()
@@ -676,6 +686,60 @@ impl InstanceView {
                                 ),
                         )
                                 })
+                                .child(
+                                    h_flex()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .w(px(140.))
+                                                .flex_none()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("HD pack"),
+                                        )
+                                        .child(div().text_sm().child(match &d.hd_pack {
+                                            Some(tag) => format!("Installed ({tag})"),
+                                            None => "Not installed".to_owned(),
+                                        }))
+                                        .child(
+                                            Button::new("hd-pack-install")
+                                                .outline()
+                                                .small()
+                                                .icon(IconName::ArrowDown)
+                                                .label(if d.hd_pack.is_some() { "Reinstall" } else { "Install" })
+                                                .disabled(busy)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    let Some(inst) = this.instance(cx) else { return };
+                                                    this.start_job("Installing the HD pack".into(), cx, move |p| {
+                                                        let m = hdpack::install(&inst.install.root, p)?;
+                                                        Ok(JobDone::HdPack(format!(
+                                                            "Installed the HD pack {} ({} files)",
+                                                            m.tag,
+                                                            m.files.len()
+                                                        )))
+                                                    });
+                                                })),
+                                        )
+                                        .when(d.hd_pack.is_some(), |r| {
+                                            r.child(
+                                                Button::new("hd-pack-remove")
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(IconName::Undo)
+                                                    .label("Remove")
+                                                    .disabled(busy)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        let Some(inst) = this.instance(cx) else { return };
+                                                        this.start_job("Removing the HD pack".into(), cx, move |p| {
+                                                            hdpack::remove(&inst.install.root, p)?;
+                                                            Ok(JobDone::HdPack(
+                                                                "Removed the HD pack: the TS 3.0 models and sounds are back".into(),
+                                                            ))
+                                                        });
+                                                    })),
+                                            )
+                                        }),
+                                )
                                 .child(detail_row(
                                     "Half-Life data",
                                     if d.valve { "valve folder present" } else { "valve folder missing" },

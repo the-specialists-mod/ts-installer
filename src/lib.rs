@@ -9,6 +9,7 @@ pub mod controls;
 pub mod desktop;
 pub mod detect;
 pub mod gamecfg;
+pub mod hdpack;
 pub mod install;
 pub mod launch;
 pub mod mdl;

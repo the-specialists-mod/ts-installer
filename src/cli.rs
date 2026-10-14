@@ -24,6 +24,7 @@ usage:
       --port-debug                  use the debug build of that Rust port release
       --keep-engine | --keep-valve | --keep-ts
                                     keep what the folder already has instead of installing it
+      --hd-pack                     also install the HD models and weapon sounds (tsmod-hdpack)
   ts-launcher list                  list the registered installations
   ts-launcher play [ID]             start an installation (default: the last one used)
   ts-launcher print-command [ID]    show the command `play` would run
@@ -31,7 +32,9 @@ usage:
                                     and of the Rust port files with the release they came from
   ts-launcher repair [ID]           extract damaged or missing TS 3.0 files again (keeps settings)
   ts-launcher reset [ID] --yes      back to a clean TS 3.0: original libraries and every release
-                                    file, settings included (custom maps and models stay)";
+                                    file, settings included; undoes the HD pack (custom maps and models stay)
+  ts-launcher hd-pack install [ID]  install the HD models and weapon sounds over an installation
+  ts-launcher hd-pack remove [ID]   put back the TS 3.0 models and sounds the HD pack replaced";
 
 /// Runs the command line in `args` (without the program name).
 pub fn run(args: &[String]) -> Result<()> {
@@ -102,6 +105,29 @@ pub fn run(args: &[String]) -> Result<()> {
                 }
             }
         }
+        Some("hd-pack") => {
+            let action = args.get(1).map(String::as_str);
+            if !matches!(action, Some("install" | "remove")) {
+                bail!("{USAGE}");
+            }
+            let store = Store::load();
+            let id = args.get(2).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
+            let inst = store.get(&id).with_context(|| format!("no installation {id}"))?;
+            let progress = Progress::new(|e| match e {
+                Event::Step { title, .. } => eprintln!("{title}"),
+                Event::Log(m) => eprintln!("    {m}"),
+                Event::Bytes { .. } => {}
+            });
+            let root = &inst.install.root;
+            if action == Some("install") {
+                let m = crate::hdpack::install(root, &progress)?;
+                println!("installed the HD pack {} into {} ({} files)", m.tag, root.join("ts").display(), m.files.len());
+            } else {
+                crate::hdpack::remove(root, &progress)?;
+                println!("removed the HD pack from {}", root.join("ts").display());
+            }
+            Ok(())
+        }
         Some(cmd @ ("play" | "print-command")) => {
             let mut store = Store::load();
             let id = args.get(1).cloned().or(store.last_used.clone()).context("nothing installed yet")?;
@@ -137,6 +163,7 @@ fn install(args: &[String]) -> Result<()> {
     let mut ts = TsSource::Download;
     let mut libs = GameLibs::Original;
     let mut arch = Arch::Amd64;
+    let mut hd_pack = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = || it.next().cloned().with_context(|| format!("{arg} needs a value"));
@@ -160,6 +187,7 @@ fn install(args: &[String]) -> Result<()> {
                 });
             }
             "--32bit" => arch = Arch::I386,
+            "--hd-pack" => hd_pack = true,
             "--port-debug" => {
                 libs = match libs {
                     GameLibs::RustPort(PortSource::Release { tag, .. }) => GameLibs::RustPort(PortSource::Release { tag, debug: true }),
@@ -190,7 +218,7 @@ fn install(args: &[String]) -> Result<()> {
         }
         false => Engine::HalfLife,
     };
-    let plan = Plan { root, engine, ts, libs };
+    let plan = Plan { root, engine, ts, libs, hd_pack };
 
     let last = std::sync::Mutex::new((0u64, std::time::Instant::now()));
     let progress = Progress::new(move |e| match e {

@@ -20,7 +20,7 @@ use gpui_kit::*;
 use ts_launcher::install::{Engine, EngineSource, Existing, GameLibs, Installation, Plan, PortSource, TsLibs, TsSource, ValveSource};
 use ts_launcher::progress::{Event, Progress};
 use ts_launcher::sources::{Arch, XashBuild};
-use ts_launcher::{detect, sources};
+use ts_launcher::{detect, hdpack, sources};
 
 use super::{Launcher, Screen, human_bytes, path_text, section};
 
@@ -123,6 +123,8 @@ pub struct Setup {
     port_tags_requested: bool,
     port_dir: Option<PathBuf>,
     port_url: Entity<InputState>,
+    /// Install the HD models and weapon sounds over `ts/`.
+    hd_pack: bool,
 
     steps: Vec<String>,
     step: usize,
@@ -214,6 +216,7 @@ impl Setup {
             port_tags_requested: false,
             port_dir: None,
             port_url,
+            hd_pack: false,
             steps: Vec::new(),
             step: 0,
             bytes: (0, None),
@@ -345,7 +348,7 @@ impl Setup {
             (true, PortChoice::Url) => GameLibs::RustPort(PortSource::Url(self.port_url.read(cx).value().trim().to_owned())),
             (true, PortChoice::Dir) => GameLibs::RustPort(PortSource::Dir(self.port_dir.clone().unwrap_or_default())),
         };
-        Plan { root: self.root(), engine, ts, libs }
+        Plan { root: self.root(), engine, ts, libs, hd_pack: self.hd_pack }
     }
 
     fn push_log(&mut self, line: String) {
@@ -847,6 +850,27 @@ impl Launcher {
                     })
                 });
 
+        let hd_installed = s.ts == TsChoice::Keep && hdpack::manifest(&s.root().join("ts")).is_some();
+        let hd_pack = section("HD pack", "", cx)
+            .child(
+                Checkbox::new("hd-pack")
+                    .label(format!("Install the HD weapon and player models and weapon sounds (about 78 MB, {})", hdpack::TAG))
+                    .checked(s.hd_pack)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.setup.hd_pack = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child(if hd_installed {
+                "This ts folder already has the HD pack: installing it again keeps the TS 3.0 files it replaced.".to_owned()
+            } else {
+                format!(
+                    "Collected from the TSMOD.NET client (tsmod.net), downloaded from github.com/{}. The TS 3.0 files it \
+                     replaces are kept, so it can be removed from the installation's Overview.",
+                    hdpack::REPO
+                )
+            }));
+
         let steps = plan.steps();
         let summary = section("Summary", "", cx)
             .when_some(runtime, |d, r| d.child(div().text_sm().child(format!("Engine: {}", r.label()))))
@@ -869,6 +893,7 @@ impl Launcher {
                     .children(valve)
                     .child(ts)
                     .child(libs)
+                    .child(hd_pack)
                     .child(summary),
             )
             .child(

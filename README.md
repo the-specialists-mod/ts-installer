@@ -19,6 +19,9 @@ application menu. The launcher updates itself from then on.
   original `ts-3-final.exe` is downloaded, checked against its MD5 and unpacked natively.
 - **The original DLLs or the [Rust port](https://github.com/the-specialists-mod/the-specialistsmod-rs)**:
   switch between them, and between port releases, at any time.
+- **HD pack**: the HD weapon and player models and weapon sounds from the TSMOD.NET client
+  ([tsmod-hdpack](https://github.com/the-specialists-mod/tsmod-hdpack)), installed with a new
+  installation or added to an existing one, and removed again with the TS 3.0 files put back.
 - **Several installations**, each with its own launch options, picked from a list.
 - **Validate, repair and reset**: checks every TS file against the release, puts damaged files
   back, or returns the install to a clean TS 3.0.
@@ -36,7 +39,7 @@ application menu. The launcher updates itself from then on.
 - **Download cache**: everything downloaded is kept and reused, so repairs and reinstalls work
   offline.
 - **Updates itself** from this repository's releases.
-- **Command line**: `ts-launcher install`, `play`, `validate`, `repair` and `reset` work without the UI.
+- **Command line**: `ts-launcher install`, `play`, `validate`, `repair`, `reset` and `hd-pack` work without the UI.
 
 ## Screenshots
 
@@ -136,6 +139,16 @@ On start the launcher checks this repository's latest release. When it is newer,
 whether to download it; the new build replaces the running one and "Restart now" starts it. Set
 `TSINSTALLER_NO_UPDATE_CHECK=1` to skip the check.
 
+### HD pack
+
+The setup's **HD pack** checkbox, or **Install** on an installation's Overview, downloads the
+[tsmod-hdpack](https://github.com/the-specialists-mod/tsmod-hdpack) release (checked against its
+SHA-256) and copies it over `ts/`: HD versions of every weapon model, the seven stock player models
+and the bull, deagle, fnh, glock22, m60 and mossberg sounds, collected from the TSMOD.NET client
+([tsmod.net](https://tsmod.net)). The TS 3.0 files it replaces are kept in
+`ts/.tsinstaller-hdpack-originals`, so **Remove** puts them back, and validation and repair check
+those copies rather than the HD files. Reset to TS 3.0 removes the pack too.
+
 ### Download cache
 
 Everything the launcher downloads stays in its cache (the data directory's `cache` folder) and is reused by later
@@ -221,6 +234,9 @@ ts-launcher install --root ~/games/ts-debug --xash --port-debug   # the Rust por
 ts-launcher install --root ~/games/ts-dev --xash \
     --port ~/src/the-specialistsmod-rs/dist                       # Rust port from a local build
 ts-launcher install --root "C:\Program Files (x86)\Steam\steamapps\common\Half-Life" --half-life
+ts-launcher install --root ~/games/ts --xash --hd-pack            # with the HD models and sounds
+ts-launcher hd-pack install                                       # add the HD pack to the last-used install
+ts-launcher hd-pack remove
 ts-launcher play
 ts-launcher print-command
 ```

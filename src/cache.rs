@@ -43,6 +43,12 @@ pub fn describe(name: &str) -> String {
     if file == sources::TS_INSTALLER_NAME {
         return "The Specialists 3.0 installer (installs, repairs and resets TS)".into();
     }
+    if name == "hdpack-unpacked" {
+        return "Unpacked HD pack files (temporary)".into();
+    }
+    if let Some(tag) = file.strip_prefix("tsmod-hdpack-").and_then(|r| r.strip_suffix(".zip")) {
+        return format!("HD pack {tag} (HD models and weapon sounds)");
+    }
     if file == sources::XASH_TS_CACHE_NAME {
         return "Half-Life data from xash3d-ts".into();
     }
@@ -120,5 +126,6 @@ mod tests {
         assert_eq!(describe("port/the-specialists-rs-v3.0.1-linux-x86_64-debug.tar.gz"), "Rust port v3.0.1 (linux-x86_64-debug)");
         assert_eq!(describe("xash3d-ts-release.zip.part"), "Incomplete download of Half-Life data from xash3d-ts (resumes next time)");
         assert_eq!(describe("port/unpacked"), "Unpacked Rust port files (temporary)");
+        assert_eq!(describe("tsmod-hdpack-v1.0.0.zip"), "HD pack v1.0.0 (HD models and weapon sounds)");
     }
 }

@@ -74,6 +74,9 @@ pub struct Plan {
     pub engine: Engine,
     pub ts: TsSource,
     pub libs: GameLibs,
+    /// Install the HD pack ([`crate::hdpack`]) over `ts/`.
+    #[serde(default)]
+    pub hd_pack: bool,
 }
 
 /// A finished install, remembered by the launcher.
@@ -320,6 +323,9 @@ impl Plan {
                 _ => "Install the Rust port libraries".into(),
             });
         }
+        if self.hd_pack {
+            steps.push(format!("Download and install the HD pack {}", crate::hdpack::TAG));
+        }
         steps
     }
 
@@ -376,6 +382,11 @@ impl Plan {
                 PortSource::Url(u) => (sources::fetch_port_archive(u, progress)?, None),
             };
             install_port(&dir, platform, manifest.as_ref(), &self.root.join("ts"), progress)?;
+        }
+
+        if self.hd_pack {
+            next(progress);
+            crate::hdpack::install(&self.root, progress)?;
         }
 
         if titles.is_empty() {
@@ -671,7 +682,7 @@ mod tests {
     use super::*;
 
     fn plan(engine: Engine, libs: GameLibs) -> Plan {
-        Plan { root: "/tmp/x".into(), engine, ts: TsSource::Download, libs }
+        Plan { root: "/tmp/x".into(), engine, ts: TsSource::Download, libs, hd_pack: false }
     }
 
     #[test]
@@ -702,9 +713,18 @@ mod tests {
             engine: Engine::Xash { engine: EngineSource::Keep(XashBuild::WindowsI386), valve: ValveSource::Keep, arch: Arch::Amd64 },
             ts: TsSource::Keep,
             libs: GameLibs::Original,
+            hd_pack: false,
         };
         assert!(p.steps().is_empty());
         assert_eq!(p.runtime().unwrap(), Runtime::Xash(XashBuild::WindowsI386));
+    }
+
+    #[test]
+    fn hd_pack_is_the_last_step() {
+        let mut p = plan(Engine::HalfLife, GameLibs::Original);
+        p.ts = TsSource::Keep;
+        p.hd_pack = true;
+        assert_eq!(p.steps(), vec![format!("Download and install the HD pack {}", crate::hdpack::TAG)]);
     }
 
     #[test]

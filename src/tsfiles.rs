@@ -3,7 +3,8 @@
 //!
 //! The installer is checked against its known MD5, and every `ts/` file in it is hashed (SHA-256)
 //! and compared with the installed copy. Files the Rust port replaces are compared with the
-//! copies kept in `ts/.tsinstaller-originals` while the port is installed. Settings the game and
+//! copies kept in `ts/.tsinstaller-originals` while the port is installed, and files the HD pack
+//! replaces with the copies in `ts/.tsinstaller-hdpack-originals`. Settings the game and
 //! the launcher rewrite are reported apart and left alone by a repair. Files the release doesn't
 //! have (custom maps, models, logs) are never looked at.
 
@@ -66,7 +67,11 @@ fn ts_entries(inst: &Installer) -> Vec<(String, Entry)> {
 /// Where the installed copy of release file `name` lives: in `ts/`, or for files the Rust port
 /// replaced, in the kept originals.
 fn installed_path(ts: &Path, name: &str, port: bool) -> PathBuf {
-    if port && PORT_REPLACES.contains(&name) { ts.join(ORIGINALS_DIR).join(name) } else { ts.join(name) }
+    if port && PORT_REPLACES.contains(&name) {
+        ts.join(ORIGINALS_DIR).join(name)
+    } else {
+        crate::hdpack::original_path(ts, name).unwrap_or_else(|| ts.join(name))
+    }
 }
 
 struct HashWriter(Sha256);
@@ -179,8 +184,8 @@ pub fn repair(root: &Path, progress: &Progress) -> Result<TsCheck> {
 }
 
 /// Resets `install` to a clean TS 3.0: the original game libraries (with the engine they need)
-/// and every release file extracted again, settings included. Files the release doesn't have,
-/// like custom maps and player models, stay.
+/// and every release file extracted again, settings included, which also undoes the HD pack.
+/// Files the release doesn't have, like custom maps and player models, stay.
 pub fn reset(install: &Installation, progress: &Progress) -> Result<Installation> {
     let ts = install.root.join("ts");
     let install = if install::ts_libs(&ts) == Some(TsLibs::Original) {
@@ -188,8 +193,10 @@ pub fn reset(install: &Installation, progress: &Progress) -> Result<Installation
     } else {
         install::switch_libs(install, LibChoice::Original, None, progress)?
     };
-    // Back on the originals: drop the kept copies, the release has them.
+    // Back on the originals: drop the kept copies, the release has them. Extracting every file
+    // again also replaces the HD pack's models and sounds.
     let _ = std::fs::remove_dir_all(ts.join(ORIGINALS_DIR));
+    crate::hdpack::forget(&ts);
     let mut inst = release_installer(progress)?;
     let names: Vec<String> = ts_entries(&inst).into_iter().map(|(n, _)| n).collect();
     progress.log(format!("extracting {} TS 3.0 files", names.len()));
