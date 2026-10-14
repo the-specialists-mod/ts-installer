@@ -12,19 +12,20 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::select::{Select, SelectState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, IndexPath, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use ts_launcher::install::{Engine, EngineSource, Existing, GameLibs, Installation, Plan, PortSource, TsLibs, TsSource, ValveSource};
 use ts_launcher::progress::{Event, Progress};
-use ts_launcher::sources::Arch;
+use ts_launcher::sources::{Arch, XashBuild};
 use ts_launcher::{detect, sources};
 
 use super::{Launcher, Screen, human_bytes, path_text, section};
 
 const LOG_LINES: usize = 300;
+const PORT_LIBS_LABEL: &str = "Rust port libraries (native)";
 
 /// Which path a file dialog fills in.
 #[derive(Clone, Copy)]
@@ -78,6 +79,9 @@ pub struct Setup {
     ts: TsChoice,
     ts_path: Option<PathBuf>,
     rust_port: bool,
+    /// The game libraries select: the original (or kept) libraries when the engine can load them, then the Rust port.
+    libs: Entity<SelectState<Vec<SharedString>>>,
+    lib_labels: Vec<SharedString>,
     port_source: PortChoice,
     /// Download the latest release's debug build.
     port_debug: bool,
@@ -110,6 +114,19 @@ impl Setup {
         .detach();
         let port_versions = cx.new(|cx| SelectState::new(vec!["Latest release".into()], Some(IndexPath::new(0)), window, cx));
         cx.observe(&port_versions, |_, _, cx| cx.notify()).detach();
+        let libs = cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
+        cx.subscribe(&libs, |this, _, e: &SelectEvent<Vec<SharedString>>, cx| {
+            let SelectEvent::Confirm(Some(label)) = e else { return };
+            let s = &mut this.setup;
+            let port = label.as_ref() == PORT_LIBS_LABEL;
+            // The original DLLs pinned the engine to 32-bit; the port defaults to the native 64-bit build.
+            if port && !s.rust_port && s.use_xash && !s.keep_engine {
+                s.xash_arch = Arch::Amd64;
+            }
+            s.rust_port = port;
+            cx.notify();
+        })
+        .detach();
         let mut setup = Self {
             use_xash: false,
             half_life: detected.first().cloned(),
@@ -117,12 +134,14 @@ impl Setup {
             xash_root: detect::default_xash_dir(),
             existing: Existing::default(),
             keep_engine: false,
-            xash_arch: Arch::Amd64,
+            xash_arch: Arch::I386,
             valve: ValveChoice::Download,
             valve_from: None,
             ts: TsChoice::Download,
             ts_path: None,
             rust_port: false,
+            libs,
+            lib_labels: Vec::new(),
             port_source: PortChoice::Release,
             port_debug: false,
             port_versions,
@@ -183,9 +202,25 @@ impl Setup {
         !self.rust_port && !(self.ts == TsChoice::Keep && self.existing.ts == Some(TsLibs::RustPort))
     }
 
-    /// The engine build shown as chosen: the original DLLs always get the 32-bit engine.
-    fn shown_arch(&self) -> Arch {
-        if self.original_libs() { Arch::I386 } else { self.xash_arch }
+    /// Whether the chosen engine can load the original 32-bit Windows DLLs.
+    fn original_allowed(&self) -> bool {
+        match (self.use_xash, self.keep_engine) {
+            (false, _) => true,
+            (true, true) => self.existing.xash == Some(XashBuild::WindowsI386),
+            (true, false) => self.xash_arch == Arch::I386,
+        }
+    }
+
+    /// Whether the first library choice keeps a Rust port already in the ts folder.
+    fn keeping_port(&self) -> bool {
+        self.ts == TsChoice::Keep && self.existing.ts == Some(TsLibs::RustPort)
+    }
+
+    /// Switches to the Rust port when the engine can't load the original DLLs.
+    fn fix_libs(&mut self) {
+        if self.original_libs() && !self.original_allowed() {
+            self.rust_port = true;
+        }
     }
 
     fn plan(&self, cx: &App) -> Plan {
@@ -445,6 +480,24 @@ impl Launcher {
                 s.set_selected_index(Some(IndexPath::new(0)), window, cx);
             });
         }
+        self.setup.fix_libs();
+        let lib_labels: Vec<SharedString> = {
+            let s = &self.setup;
+            let original = match (s.ts == TsChoice::Keep, s.existing.ts) {
+                (true, Some(TsLibs::RustPort)) => "Keep the libraries in the ts folder (Rust port)",
+                (true, _) => "Keep the libraries in the ts folder (TS 3.0 original)",
+                (false, _) => "Original TS 3.0 client.dll / mp.dll",
+            };
+            (s.keeping_port() || s.original_allowed()).then_some(original.into()).into_iter().chain([PORT_LIBS_LABEL.into()]).collect()
+        };
+        let lib_ix = if self.setup.rust_port { lib_labels.len() - 1 } else { 0 };
+        if lib_labels != self.setup.lib_labels {
+            self.setup.lib_labels = lib_labels.clone();
+            self.setup.libs.update(cx, |st, cx| st.set_items(lib_labels, window, cx));
+        }
+        if self.setup.libs.read(cx).selected_index(cx).map(|i| i.row) != Some(lib_ix) {
+            self.setup.libs.update(cx, |st, cx| st.set_selected_index(Some(IndexPath::new(lib_ix)), window, cx));
+        }
         let plan = self.setup.plan(cx);
         let problem = plan.validate().err().map(|e| format!("{e:#}"));
         let runtime = plan.runtime().ok();
@@ -491,8 +544,8 @@ impl Launcher {
 
         let engine = s.use_xash.then(|| {
             let arch_note = if s.original_libs() {
-                "The original TS 3.0 DLLs are 32-bit Windows libraries, so they need the 32-bit build. \
-                 Choosing 64-bit switches the game libraries to the Rust port."
+                "The original TS 3.0 DLLs are 32-bit Windows libraries, so only the 32-bit build loads them. \
+                 The 64-bit build uses the Rust port libraries."
             } else if s.xash_arch == Arch::I386 && !cfg!(windows) {
                 "The 32-bit Linux build loads the port's i686 libraries and needs your system's 32-bit libraries (lib32 / i386 packages)."
             } else {
@@ -515,13 +568,10 @@ impl Launcher {
                     d.child(
                         h_flex().gap_3().child(div().text_sm().child("Xash3D FWGS build")).child(
                             RadioGroup::horizontal("xash-arch")
-                                .selected_index(Some(s.shown_arch() as usize))
+                                .selected_index(Some(s.xash_arch as usize))
                                 .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                                    let arch = [Arch::Amd64, Arch::I386][*ix];
-                                    this.setup.xash_arch = arch;
-                                    if arch == Arch::Amd64 && this.setup.original_libs() {
-                                        this.setup.rust_port = true;
-                                    }
+                                    this.setup.xash_arch = [Arch::Amd64, Arch::I386][*ix];
+                                    this.setup.fix_libs();
                                     cx.notify();
                                 }))
                                 .child(Radio::new("arch-amd64").label(Arch::Amd64.label()))
@@ -615,28 +665,13 @@ impl Launcher {
                 )
             });
 
-        let keeping_ts = s.ts == TsChoice::Keep;
-        let original_label = match (keeping_ts, s.existing.ts) {
-            (true, Some(TsLibs::RustPort)) => "Keep the libraries in the ts folder (Rust port)",
-            (true, _) => "Keep the libraries in the ts folder (TS 3.0 original)",
-            (false, _) => "Original TS 3.0 client.dll / mp.dll",
-        };
-        let original_note = match (s.use_xash, cfg!(windows), keeping_ts && s.existing.ts == Some(TsLibs::RustPort)) {
+        let original_note = match (s.use_xash, cfg!(windows), s.keeping_port()) {
             (true, false, false) => "Runs the 32-bit Windows Xash3D FWGS through Wine (install wine first).",
             (false, false, false) => "TS 3.0 has no Linux client: Steam must run Half-Life through Proton.",
             _ => "",
         };
         let libs = section("Game libraries", "TS 3.0 only shipped a 32-bit Windows client. The Rust port provides native libraries.", cx)
-            .child(
-                RadioGroup::vertical("libs")
-                    .selected_index(Some(s.rust_port as usize))
-                    .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                        this.setup.rust_port = *ix == 1;
-                        cx.notify();
-                    }))
-                    .child(Radio::new("libs-original").label(original_label))
-                    .child(Radio::new("libs-port").label("Install the Rust port libraries (native)")),
-            )
+            .child(div().w(px(420.)).child(Select::new(&s.libs).id("wizard-libs").small()))
             .when(!s.rust_port && !original_note.is_empty(), |d| {
                 d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
             })
