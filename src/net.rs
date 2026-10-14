@@ -23,14 +23,69 @@ pub fn agent() -> ureq::Agent {
         .into()
 }
 
+/// Delays before each retry of a request whose connection failed.
+const RETRY_DELAYS: [Duration; 2] = if cfg!(test) { [Duration::ZERO; 2] } else { [Duration::from_secs(1), Duration::from_secs(4)] };
+
+/// Sends the request `make` builds, retrying connection-level failures (refused, reset, timed out,
+/// Windows running out of sockets) a couple of times: they are often transient. `progress`, when
+/// given, hears about retries and can cancel between them.
+fn call(
+    url: &str,
+    progress: Option<&Progress>,
+    make: impl Fn() -> ureq::RequestBuilder<ureq::typestate::WithoutBody>,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    let mut delays = RETRY_DELAYS.iter();
+    loop {
+        let e = match make().call() {
+            Ok(res) => return Ok(res),
+            Err(e) => e,
+        };
+        let retryable =
+            matches!(e, ureq::Error::Io(_) | ureq::Error::Timeout(_) | ureq::Error::HostNotFound | ureq::Error::ConnectionFailed);
+        match delays.next() {
+            Some(delay) if retryable => {
+                log::info!("GET {url}: {e}; retrying in {}s", delay.as_secs());
+                if let Some(p) = progress {
+                    p.log(format!("GET {url}: {e}; retrying in {}s", delay.as_secs()));
+                }
+                std::thread::sleep(*delay);
+                if let Some(p) = progress {
+                    p.check_cancelled()?;
+                }
+            }
+            _ => {
+                return Err(match hint(&e) {
+                    Some(hint) => anyhow::anyhow!("GET {url}: {e}\n{hint}"),
+                    None => anyhow::Error::new(e).context(format!("GET {url}")),
+                });
+            }
+        }
+    }
+}
+
+/// Advice for socket errors that come from the local machine rather than the server.
+fn hint(e: &ureq::Error) -> Option<&'static str> {
+    let ureq::Error::Io(io) = e else { return None };
+    // Winsock codes (WSAENOBUFS, WSAEADDRINUSE, WSAEACCES); no Unix errno is this large.
+    match io.raw_os_error()? {
+        10055 | 10048 => Some(
+            "Windows ran out of network sockets or ports. This usually comes from another program \
+             (VPN, antivirus or firewall, \"network accelerator\" software, or an app holding many connections). \
+             Restart the PC and try again; if it keeps happening, run `netsh winsock reset` in an administrator \
+             Command Prompt and restart.",
+        ),
+        10013 => Some(
+            "Windows refused the connection before it left this PC. A firewall, antivirus or VPN is likely \
+             blocking the launcher: allow it there and try again.",
+        ),
+        _ => None,
+    }
+}
+
 /// Fetches JSON from the GitHub API.
 pub fn get_json(url: &str) -> Result<serde_json::Value> {
-    let mut res = agent()
-        .get(url)
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .call()
-        .with_context(|| format!("GET {url}"))?;
+    let mut res =
+        call(url, None, || agent().get(url).header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28"))?;
     let status = res.status();
     ensure!(status.is_success(), "GET {url}: HTTP {status}");
     Ok(res.body_mut().read_json()?)
@@ -62,11 +117,10 @@ pub fn download(url: &str, dest: &Path, md5: Option<&str>, progress: &Progress) 
     }
     let part = dest.with_extension("part");
     let mut have = fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-    let mut req = agent().get(url);
-    if have > 0 {
-        req = req.header("Range", format!("bytes={have}-"));
-    }
-    let mut res = req.call().with_context(|| format!("GET {url}"))?;
+    let mut res = call(url, Some(progress), || {
+        let req = agent().get(url);
+        if have > 0 { req.header("Range", format!("bytes={have}-")) } else { req }
+    })?;
     let status = res.status();
     if status.as_u16() == 416 {
         // The part file is already complete (or bogus): start over.
@@ -237,4 +291,34 @@ pub fn cached_github_asset(repo: &str, tag: &str, name: &str, dest: &Path, progr
         bail!("{name}: the download doesn't match the SHA-256 published with the release");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::net::TcpListener;
+
+    #[test]
+    fn connection_failures_are_retried() {
+        // A port that was just free: connecting to it is refused.
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{port}/");
+        let tries = Cell::new(0);
+        let err = call(&url, None, || {
+            tries.set(tries.get() + 1);
+            agent().get(&url)
+        })
+        .unwrap_err();
+        assert_eq!(tries.get(), 1 + RETRY_DELAYS.len());
+        assert!(format!("{err:#}").starts_with(&format!("GET {url}")), "{err:#}");
+    }
+
+    #[test]
+    fn windows_socket_exhaustion_gets_a_hint() {
+        let e = ureq::Error::Io(io::Error::from_raw_os_error(10055));
+        assert!(hint(&e).unwrap().contains("netsh winsock reset"));
+        assert!(hint(&ureq::Error::Io(io::Error::from(io::ErrorKind::ConnectionRefused))).is_none());
+        assert!(hint(&ureq::Error::HostNotFound).is_none());
+    }
 }
