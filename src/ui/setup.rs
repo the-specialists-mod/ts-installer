@@ -1,6 +1,6 @@
 //! Adding an installation: the welcome choice, the setup form, and install progress.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -69,6 +69,16 @@ pub struct Setup {
     half_life: Option<PathBuf>,
     detected: Vec<PathBuf>,
     xash_root: PathBuf,
+    /// `<launcher folder>/installs` when the Windows installer put the launcher there: new Xash3D
+    /// installations go into a folder named after `install_name` in it.
+    installs_dir: Option<PathBuf>,
+    /// `xash_root` was picked with the folder selector, overriding `installs_dir`.
+    xash_picked: bool,
+    install_name: Entity<InputState>,
+    /// `install_name`'s text, kept here so the target folder can be worked out without `cx`.
+    install_name_text: String,
+    /// The name to give the installation being installed.
+    pending_name: Option<String>,
     /// What the chosen folder already contains.
     existing: Existing,
     keep_engine: bool,
@@ -112,6 +122,18 @@ impl Setup {
             }
         })
         .detach();
+        let installs_dir = detect::installed_launcher_installs_dir();
+        let install_name_text = installs_dir.as_deref().map(detect::free_install_name).unwrap_or_default();
+        let initial_name = install_name_text.clone();
+        let install_name = cx.new(|cx| InputState::new(window, cx).default_value(initial_name));
+        cx.subscribe(&install_name, |this, state, e: &InputEvent, cx| {
+            if matches!(e, InputEvent::Change) {
+                this.setup.install_name_text = state.read(cx).value().to_string();
+                this.setup.refresh_existing();
+                cx.notify();
+            }
+        })
+        .detach();
         let port_versions = cx.new(|cx| SelectState::new(vec!["Latest release".into()], Some(IndexPath::new(0)), window, cx));
         cx.observe(&port_versions, |_, _, cx| cx.notify()).detach();
         let libs = cx.new(|cx| SelectState::new(Vec::<SharedString>::new(), None, window, cx));
@@ -132,6 +154,11 @@ impl Setup {
             half_life: detected.first().cloned(),
             detected,
             xash_root: detect::default_xash_dir(),
+            installs_dir,
+            xash_picked: false,
+            install_name,
+            install_name_text,
+            pending_name: None,
             existing: Existing::default(),
             keep_engine: false,
             xash_arch: Arch::Amd64,
@@ -162,7 +189,25 @@ impl Setup {
     }
 
     fn root(&self) -> PathBuf {
-        if self.use_xash { self.xash_root.clone() } else { self.half_life.clone().unwrap_or_default() }
+        match (self.use_xash, self.named_install()) {
+            (true, Some(dir)) => dir.join(self.install_name_text.trim()),
+            (true, None) => self.xash_root.clone(),
+            (false, _) => self.half_life.clone().unwrap_or_default(),
+        }
+    }
+
+    /// The folder named installations go in, while the target is named rather than picked.
+    fn named_install(&self) -> Option<&Path> {
+        self.installs_dir.as_deref().filter(|_| self.use_xash && !self.xash_picked)
+    }
+
+    /// Picks a fresh name for the next installation, as one may have just used the last one.
+    fn regenerate_name(&mut self, window: &mut Window, cx: &mut App) {
+        if let Some(dir) = &self.installs_dir {
+            let name = detect::free_install_name(dir);
+            self.install_name.update(cx, |s, cx| s.set_value(name.clone(), window, cx));
+            self.install_name_text = name;
+        }
     }
 
     /// Re-inspects the chosen folder and defaults every choice to keeping what is there.
@@ -288,6 +333,7 @@ impl Launcher {
                     }
                     PathField::XashRoot => {
                         s.xash_root = path;
+                        s.xash_picked = true;
                         s.refresh_existing();
                     }
                     PathField::ValveFrom => s.valve_from = Some(path),
@@ -306,6 +352,7 @@ impl Launcher {
             return;
         }
         let s = &mut self.setup;
+        s.pending_name = s.named_install().map(|_| s.install_name_text.trim().to_owned());
         s.steps = plan.steps();
         s.step = 0;
         s.bytes = (0, None);
@@ -351,8 +398,12 @@ impl Launcher {
             Msg::Event(Event::Log(line)) => s.push_log(line),
             Msg::Done(Ok(installation)) => {
                 s.cancel = None;
+                let name = s.pending_name.take();
                 let (id, saved) = self.state.update(cx, |state, cx| {
                     let id = state.store.add(installation);
+                    if let (Some(name), Some(inst)) = (name, state.store.get_mut(&id)) {
+                        inst.name = name;
+                    }
                     cx.notify();
                     (id, state.save())
                 });
@@ -382,8 +433,9 @@ impl Launcher {
                 .bg(super::theme::panel())
                 .cursor_pointer()
                 .hover(|s| s.border_color(cx.theme().primary))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.setup.use_xash = xash;
+                    this.setup.regenerate_name(window, cx);
                     this.setup.refresh_existing();
                     this.show(Screen::Setup, cx);
                 }))
@@ -499,22 +551,49 @@ impl Launcher {
             self.setup.libs.update(cx, |st, cx| st.set_selected_index(Some(IndexPath::new(lib_ix)), window, cx));
         }
         let plan = self.setup.plan(cx);
-        let problem = plan.validate().err().map(|e| format!("{e:#}"));
+        let name_problem = self.setup.named_install().and_then(|_| detect::folder_name_problem(&self.setup.install_name_text));
+        let problem = match name_problem {
+            Some(p) => Some(p.to_owned()),
+            None => plan.validate().err().map(|e| format!("{e:#}")),
+        };
         let runtime = plan.runtime().ok();
         let s = &self.setup;
 
         let location = if s.use_xash {
-            section("Install folder", "Xash3D FWGS, the Half-Life data and TS go here.", cx)
-                .child(
-                    h_flex().gap_2().child(path_text(Some(&s.xash_root), "", cx)).child(
-                        Button::new("browse-xash")
-                            .outline()
-                            .icon(IconName::FolderOpen)
-                            .label("Browse…")
-                            .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::XashRoot, true, cx))),
-                    ),
+            let named = s.named_install().is_some();
+            let browse = Button::new("browse-xash")
+                .outline()
+                .icon(IconName::FolderOpen)
+                .label(if named { "Choose another folder…" } else { "Browse…" })
+                .on_click(cx.listener(|this, _, _, cx| this.browse(PathField::XashRoot, true, cx)));
+            let target = if named {
+                v_flex()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().w(px(60.)).flex_none().text_sm().child("Name"))
+                            .child(div().w(px(320.)).child(Input::new(&s.install_name).small()))
+                            .child(browse),
+                    )
+                    .child(div().text_sm().text_color(cx.theme().muted_foreground).child(format!("Installs into {}", s.root().display())))
+            } else {
+                v_flex().gap_2().child(h_flex().gap_2().child(path_text(Some(&s.xash_root), "", cx)).child(browse)).when(
+                    s.installs_dir.is_some(),
+                    |d| {
+                        d.child(h_flex().child(
+                            Button::new("use-installs-dir").ghost().small().label("Install next to the launcher instead").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.setup.xash_picked = false;
+                                    this.setup.refresh_existing();
+                                    cx.notify();
+                                }),
+                            ),
+                        ))
+                    },
                 )
-                .child(self.existing_summary(cx))
+            };
+            section("Install folder", "Xash3D FWGS, the Half-Life data and TS go here.", cx).child(target).child(self.existing_summary(cx))
         } else {
             let detected = s.detected.clone();
             section("Half-Life folder", "The folder that contains valve/ (and hl.exe or hl_linux).", cx)
