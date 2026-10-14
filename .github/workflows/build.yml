@@ -35,6 +35,23 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $find = { Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup *", "$env:ProgramFiles\Inno Setup *" -Filter ISCC.exe -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          $iscc = & $find
+          if (-not $iscc) { choco install innosetup -y --no-progress; if ($LASTEXITCODE) { exit 1 }; $iscc = & $find }
+          if (-not $iscc) { throw "ISCC.exe not found" }
+          $iscc = $iscc.FullName
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          & $iscc /Q "/DAppVersion=$version" "/DExe=$PWD\target\release\ts-launcher.exe" /DOutputName=ts-launcher-setup installer\ts-launcher.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: ts-launcher-windows-x86_64-setup
+          path: target/installer/ts-launcher-setup.exe
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -47,8 +64,10 @@ jobs:
       - run: |
           mv ts-launcher-linux-x86_64/ts-launcher ts-launcher-${{ github.ref_name }}-linux-x86_64.bin
           mv ts-launcher-windows-x86_64/ts-launcher.exe ts-launcher-${{ github.ref_name }}-windows-x86_64.exe
+          mv ts-launcher-windows-x86_64-setup/ts-launcher-setup.exe ts-launcher-${{ github.ref_name }}-windows-x86_64-setup.exe
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             ts-launcher-${{ github.ref_name }}-linux-x86_64.bin
             ts-launcher-${{ github.ref_name }}-windows-x86_64.exe
+            ts-launcher-${{ github.ref_name }}-windows-x86_64-setup.exe

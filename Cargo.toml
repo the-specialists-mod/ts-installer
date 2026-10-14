@@ -15,7 +15,7 @@ dunce = "1.0.5"
 env_logger = "0.11.11"
 flate2 = "1.1.10"
 gpui-kit = "0.7"
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4.34"
 md-5 = "0.11.0"
 sha2 = "0.11.0"
@@ -30,3 +30,6 @@ zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
 [target.'cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))'.dependencies]
 libloading = "0.8"
 steamworks = { version = "0.13.1", features = ["raw-bindings"] }
+
+[build-dependencies]
+winresource = "0.1.34"

@@ -12,6 +12,9 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(steam_client)");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
+    if os == "windows" {
+        embed_icon();
+    }
     // The targets with a library in assets/steam (and steamworks in Cargo.toml).
     if arch != "x86_64" || !(os == "linux" || os == "windows") {
         return;
@@ -44,4 +47,15 @@ fn main() {
     writeln!(out, "    slots = sym SLOTS,\n);").unwrap();
     let path = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("steam_stubs.rs");
     std::fs::write(path, out).unwrap();
+}
+
+/// Puts assets/icon/ts-launcher.ico in the executable as icon resource 1, which Explorer shows and
+/// GPUI loads for the window and taskbar.
+fn embed_icon() {
+    println!("cargo:rerun-if-changed=assets/icon/ts-launcher.ico");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon_with_id("assets/icon/ts-launcher.ico", "1")
+        .set("ProductName", "The Specialists Launcher")
+        .set("FileDescription", "The Specialists Launcher");
+    res.compile().expect("embed the launcher icon");
 }

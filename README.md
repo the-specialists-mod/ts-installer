@@ -4,8 +4,11 @@ An installer and launcher for **The Specialists 3.0**, built with [GPUI](https:/
 [gpui-component](https://github.com/longbridge/gpui-component). Runs on Windows and Linux.
 
 **Download:** [latest release](https://github.com/the-specialists-mod/tsmod-launcher/releases/latest)
-(`ts-launcher-<version>-windows-x86_64.exe`, or `ts-launcher-<version>-linux-x86_64.bin`, which
-needs `chmod +x` first). It updates itself from then on.
+On Windows, run `ts-launcher-<version>-windows-x86_64-setup.exe`: it installs for your user only
+(no administrator prompt) and adds Start menu and optional desktop shortcuts. The bare
+`ts-launcher-<version>-windows-x86_64.exe` also runs on its own. On Linux, download
+`ts-launcher-<version>-linux-x86_64.bin` and `chmod +x` it; on first start it adds itself to the
+application menu. The launcher updates itself from then on.
 
 ![Server browser](docs/screenshots/servers.webp)
 
