@@ -1,6 +1,6 @@
 [package]
 name = "ts-launcher"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 description = "Installer and launcher for The Specialists 3.0 (Half-Life or Xash3D FWGS)"
 repository = "https://github.com/the-specialists-mod/tsmod-launcher"
