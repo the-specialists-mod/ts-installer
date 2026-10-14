@@ -533,22 +533,23 @@ impl InstanceView {
                                             ),
                                         ),
                                 )
-                                .child(
-                                    h_flex()
-                                        .gap_3()
-                                        .child(
-                                            div()
-                                                .w(px(140.))
-                                                .flex_none()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Rust port version"),
-                                        )
-                                        .child(div().w(px(260.)).child(
-                                            Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some()),
-                                        ))
-                                        .when(port_installed, |r| {
-                                            r.child(
+                                // The port's version and validation only apply while its libraries are installed.
+                                .when(port_installed, |el| {
+                                    el.child(
+                                        h_flex()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .w(px(140.))
+                                                    .flex_none()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("Rust port version"),
+                                            )
+                                            .child(div().w(px(260.)).child(
+                                                Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some()),
+                                            ))
+                                            .child(
                                                 Button::new("validate-port")
                                                     .outline()
                                                     .small()
@@ -557,33 +558,28 @@ impl InstanceView {
                                                     .disabled(self.switching.is_some())
                                                     .on_click(cx.listener(|this, _, _, cx| this.validate(cx))),
                                             )
-                                        })
-                                        .when_some(self.repair.clone(), |r, tag| {
-                                            r.child(
-                                                Button::new("repair-port")
-                                                    .primary()
-                                                    .small()
-                                                    .label(format!("Reinstall {tag}"))
-                                                    .disabled(self.switching.is_some())
-                                                    .on_click(
-                                                        cx.listener(move |this, _, _, cx| {
+                                            .when_some(self.repair.clone(), |r, tag| {
+                                                r.child(
+                                                    Button::new("repair-port")
+                                                        .primary()
+                                                        .small()
+                                                        .label(format!("Reinstall {tag}"))
+                                                        .disabled(self.switching.is_some())
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
                                                             this.install_version(Some(tag.clone()), true, cx)
-                                                        }),
-                                                    ),
-                                            )
-                                        }),
-                                )
-                                .child(detail_row(
-                                    "",
-                                    match (port_installed, &installed) {
-                                        (true, Some(m)) => format!("Installed: {} ({})", m.tag, m.asset),
-                                        (true, None) => {
-                                            "Installed from a folder or URL, or by an older launcher: no release recorded".into()
-                                        }
-                                        (false, _) => "Used when you switch to the Rust port".into(),
-                                    },
-                                    cx,
-                                ))
+                                                        })),
+                                                )
+                                            }),
+                                    )
+                                    .child(detail_row(
+                                        "",
+                                        match &installed {
+                                            Some(m) => format!("Installed: {} ({})", m.tag, m.asset),
+                                            None => "Installed from a folder or URL, or by an older launcher: no release recorded".into(),
+                                        },
+                                        cx,
+                                    ))
+                                })
                                 .when_some(self.switching.as_ref(), |el, s| {
                                     let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
                                     el.child(

@@ -178,6 +178,16 @@ impl Setup {
         v
     }
 
+    /// Whether TS ends up with the original 32-bit Windows DLLs, which only the 32-bit Windows engine loads.
+    fn original_libs(&self) -> bool {
+        !self.rust_port && !(self.ts == TsChoice::Keep && self.existing.ts == Some(TsLibs::RustPort))
+    }
+
+    /// The engine build shown as chosen: the original DLLs always get the 32-bit engine.
+    fn shown_arch(&self) -> Arch {
+        if self.original_libs() { Arch::I386 } else { self.xash_arch }
+    }
+
     fn plan(&self, cx: &App) -> Plan {
         let engine = if self.use_xash {
             Engine::Xash {
@@ -479,18 +489,47 @@ impl Launcher {
                 })
         };
 
-        let engine = (s.use_xash && s.existing.xash.is_some()).then(|| {
-            let build = s.existing.xash.map(|b| b.label()).unwrap_or_default();
-            section("Engine", "", cx).child(
-                RadioGroup::vertical("engine-source")
-                    .selected_index(Some(if s.keep_engine { 0 } else { 1 }))
-                    .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                        this.setup.keep_engine = *ix == 0;
-                        cx.notify();
-                    }))
-                    .child(Radio::new("engine-keep").label(format!("Keep the installed {build}")))
-                    .child(Radio::new("engine-download").label("Download the latest Xash3D FWGS build")),
-            )
+        let engine = s.use_xash.then(|| {
+            let arch_note = if s.original_libs() {
+                "The original TS 3.0 DLLs are 32-bit Windows libraries, so they need the 32-bit build. \
+                 Choosing 64-bit switches the game libraries to the Rust port."
+            } else if s.xash_arch == Arch::I386 && !cfg!(windows) {
+                "The 32-bit Linux build loads the port's i686 libraries and needs your system's 32-bit libraries (lib32 / i386 packages)."
+            } else {
+                ""
+            };
+            section("Engine", "", cx)
+                .when_some(s.existing.xash, |d, build| {
+                    d.child(
+                        RadioGroup::vertical("engine-source")
+                            .selected_index(Some(if s.keep_engine { 0 } else { 1 }))
+                            .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                                this.setup.keep_engine = *ix == 0;
+                                cx.notify();
+                            }))
+                            .child(Radio::new("engine-keep").label(format!("Keep the installed {}", build.label())))
+                            .child(Radio::new("engine-download").label("Download the latest Xash3D FWGS build")),
+                    )
+                })
+                .when(!s.keep_engine, |d| {
+                    d.child(
+                        h_flex().gap_3().child(div().text_sm().child("Xash3D FWGS build")).child(
+                            RadioGroup::horizontal("xash-arch")
+                                .selected_index(Some(s.shown_arch() as usize))
+                                .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                                    let arch = [Arch::Amd64, Arch::I386][*ix];
+                                    this.setup.xash_arch = arch;
+                                    if arch == Arch::Amd64 && this.setup.original_libs() {
+                                        this.setup.rust_port = true;
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(Radio::new("arch-amd64").label(Arch::Amd64.label()))
+                                .child(Radio::new("arch-i386").label(Arch::I386.label())),
+                        ),
+                    )
+                    .when(!arch_note.is_empty(), |d| d.child(div().text_sm().text_color(cx.theme().muted_foreground).child(arch_note)))
+                })
         });
 
         let valve = s.use_xash.then(|| {
@@ -582,10 +621,9 @@ impl Launcher {
             (true, _) => "Keep the libraries in the ts folder (TS 3.0 original)",
             (false, _) => "Original TS 3.0 client.dll / mp.dll",
         };
-        let original_is_original = !(keeping_ts && s.existing.ts == Some(TsLibs::RustPort));
-        let original_note = match (s.use_xash, cfg!(windows), original_is_original) {
-            (true, false, true) => "Runs the 32-bit Windows Xash3D FWGS through Wine (install wine first).",
-            (false, false, true) => "TS 3.0 has no Linux client: Steam must run Half-Life through Proton.",
+        let original_note = match (s.use_xash, cfg!(windows), keeping_ts && s.existing.ts == Some(TsLibs::RustPort)) {
+            (true, false, false) => "Runs the 32-bit Windows Xash3D FWGS through Wine (install wine first).",
+            (false, false, false) => "TS 3.0 has no Linux client: Steam must run Half-Life through Proton.",
             _ => "",
         };
         let libs = section("Game libraries", "TS 3.0 only shipped a 32-bit Windows client. The Rust port provides native libraries.", cx)
@@ -601,28 +639,6 @@ impl Launcher {
             )
             .when(!s.rust_port && !original_note.is_empty(), |d| {
                 d.child(div().text_sm().text_color(cx.theme().warning).child(original_note))
-            })
-            .when(s.rust_port && s.use_xash && !s.keep_engine, |d| {
-                d.child(
-                    h_flex()
-                        .gap_3()
-                        .child(div().text_sm().child("Xash3D FWGS build"))
-                        .child(
-                            RadioGroup::horizontal("xash-arch")
-                                .selected_index(Some(s.xash_arch as usize))
-                                .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                                    this.setup.xash_arch = [Arch::Amd64, Arch::I386][*ix];
-                                    cx.notify();
-                                }))
-                                .child(Radio::new("arch-amd64").label(Arch::Amd64.label()))
-                                .child(Radio::new("arch-i386").label(Arch::I386.label())),
-                        ),
-                )
-                .when(s.xash_arch == Arch::I386 && !cfg!(windows), |d| {
-                    d.child(div().text_sm().text_color(cx.theme().muted_foreground).child(
-                        "The 32-bit Linux build loads the port's i686 libraries and needs your system's 32-bit libraries (lib32 / i386 packages).",
-                    ))
-                })
             })
             .when(s.rust_port, |d| {
                 d.child(
@@ -644,19 +660,20 @@ impl Launcher {
                                 .gap_4()
                                 .child(div().w(px(200.)).flex_none().child(Select::new(&s.port_versions).id("wizard-port-version").small()))
                                 .child(
-                                    Checkbox::new("port-debug").label("Debug build (debug info and assertions)").checked(s.port_debug).on_click(
-                                        cx.listener(|this, checked: &bool, _, cx| {
+                                    Checkbox::new("port-debug")
+                                        .label("Debug build (debug info and assertions)")
+                                        .checked(s.port_debug)
+                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                             this.setup.port_debug = *checked;
                                             cx.notify();
-                                        }),
-                                    ),
+                                        })),
                                 ),
                         )
                         .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("Downloaded from github.com/{} and checked against the release's SHA-256", sources::PORT_REPO)),
+                            div().text_sm().text_color(cx.theme().muted_foreground).child(format!(
+                                "Downloaded from github.com/{} and checked against the release's SHA-256",
+                                sources::PORT_REPO
+                            )),
                         )
                         .into_any_element(),
                     PortChoice::Url => h_flex().child(Input::new(&s.port_url)).into_any_element(),
