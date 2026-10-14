@@ -235,3 +235,18 @@ Linux needs the usual GPUI dependencies (Vulkan, Wayland/X11, xkbcommon, fontcon
 release builds compile GPUI's DirectX shaders with `fxc.exe` from the Windows SDK, so build them
 on Windows (CI does). `TS_INSTALLER=path/to/ts-3-final.exe cargo test` also runs the Clickteam
 extractor against the real installer.
+
+## License
+
+The launcher is released under the [MIT License](LICENSE).
+Copyright (c) 2026 The Specialists Mod contributors.
+
+* The Specialists, Half-Life and Xash3D FWGS aren't part of this repository. The launcher
+  downloads them, and they stay under their own licenses (Xash3D FWGS is GPL; TS and Half-Life
+  belong to their owners).
+* `src/clickteam.rs` implements the Clickteam Install Creator format from the notes in Bioruebe's
+  [cicdec](https://github.com/Bioruebe/cicdec) (BSD-3-Clause). No cicdec code is included.
+* `src/steam_broker.rs` implements FWGS's steam-broker protocol independently. No code comes
+  from FWGS's own broker.
+* `src/mdl.rs` follows the Half-Life SDK's `studio.h` layouts and the `mdlviewer` bone maths.
+  That material is also subject to Valve's Half-Life 1 SDK license.

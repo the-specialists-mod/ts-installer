@@ -4,6 +4,7 @@ version = "0.8.0"
 edition = "2024"
 description = "Installer and launcher for The Specialists 3.0 (Half-Life or Xash3D FWGS)"
 repository = "https://github.com/the-specialists-mod/tsmod-launcher"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.104"
