@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 
+use crate::server_host::GameMode;
+
 /// The game directory servers must report.
 pub const GAMEDIR: &str = "ts";
 pub const DEFAULT_PORT: u16 = 27015;
@@ -75,6 +77,22 @@ pub struct ServerInfo {
 impl ServerInfo {
     pub fn is_ts(&self) -> bool {
         self.folder.eq_ignore_ascii_case(GAMEDIR)
+    }
+
+    /// The game mode, from the description's last `(...)`: TS says "The Specialists (DM)", the
+    /// Rust port "The Specialists v3.0.2 (DM)". Unknown modes come back as written; empty when
+    /// there is none.
+    pub fn mode(&self) -> String {
+        let Some(inner) = self.game.strip_suffix(')').and_then(|g| g.rsplit_once('(')).map(|(_, m)| m.trim()) else {
+            return String::new();
+        };
+        match inner {
+            "DM" => GameMode::Deathmatch.label().into(),
+            "Teamplay" => GameMode::TeamDeathmatch.label().into(),
+            "LMS" => GameMode::LastManStanding.label().into(),
+            "The One" => GameMode::TheOne.label().into(),
+            other => other.into(),
+        }
     }
 }
 
@@ -503,6 +521,7 @@ mod tests {
         assert_eq!(info.map, "ts_ugah_dm1");
         assert_eq!(info.folder, "ts");
         assert_eq!(info.game, "The Specialists (DM)");
+        assert_eq!(info.mode(), "Deathmatch");
         assert_eq!((info.players, info.max_players, info.bots), (0, 32, 0));
         assert_eq!((info.server_type, info.os, info.password, info.vac), ('d', 'l', false, true));
         assert!(info.is_ts());
@@ -514,8 +533,19 @@ mod tests {
         assert_eq!(info.name, "Launcher test");
         assert_eq!(info.map, "ts_dojo");
         assert_eq!(info.game, "The Specialists (Teamplay)");
+        assert_eq!(info.mode(), "Team deathmatch");
         assert_eq!((info.players, info.max_players, info.bots), (4, 8, 3));
         assert_eq!((info.server_type, info.os, info.password), ('l', 'l', false));
+    }
+
+    #[test]
+    fn modes_from_descriptions() {
+        let mode = |game: &str| ServerInfo { game: game.into(), ..Default::default() }.mode();
+        assert_eq!(mode("The Specialists v3.0.2 (LMS)"), "Last man standing");
+        assert_eq!(mode("The Specialists (The One)"), "The One");
+        assert_eq!(mode("The Specialists (Gungame)"), "Gungame");
+        assert_eq!(mode("The Specialists"), "");
+        assert_eq!(mode(""), "");
     }
 
     #[test]

@@ -61,6 +61,7 @@ struct RowView {
     password: bool,
     name: String,
     map: String,
+    mode: String,
     players: u8,
     max_players: u8,
     bots: u8,
@@ -84,11 +85,12 @@ fn source_icon(source: Source) -> Icon {
 }
 
 /// The first column holds the favorite star and the icons of the other sources.
-const COLUMNS: [(&str, &str, f32); 7] = [
+const COLUMNS: [(&str, &str, f32); 8] = [
     ("fav", "", 76.),
     ("lock", "", 28.),
     ("name", "Name", 226.),
     ("map", "Map", 116.),
+    ("mode", "Mode", 128.),
     ("players", "Players", 112.),
     ("ping", "Ping", 76.),
     ("address", "Address", 160.),
@@ -114,6 +116,7 @@ impl ServerTable {
                         "lock" => a.password.cmp(&b.password),
                         "name" => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                         "map" => a.map.cmp(&b.map),
+                        "mode" => a.mode.cmp(&b.mode),
                         "players" => a.players.cmp(&b.players),
                         "ping" => a.ping.unwrap_or(u32::MAX).cmp(&b.ping.unwrap_or(u32::MAX)),
                         _ => a.address.cmp(&b.address),
@@ -191,6 +194,7 @@ impl TableDelegate for ServerTable {
             "name" if !r.answered => div().text_color(muted).child(text(r.name.clone())).into_any_element(),
             "name" => text(r.name.clone()),
             "map" => text(r.map.clone()),
+            "mode" => text(r.mode.clone()),
             "players" if !r.answered => div().into_any_element(),
             "players" => {
                 let bots = if r.bots > 0 { format!(" ({} bots)", r.bots) } else { String::new() };
@@ -303,7 +307,7 @@ impl ServersTab {
         })
         .detach();
 
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, map or address"));
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, map, mode or address"));
         cx.subscribe(&filter, |this, _, e: &InputEvent, cx| {
             if matches!(e, InputEvent::Change) {
                 this.rebuild(cx);
@@ -524,6 +528,7 @@ impl ServersTab {
                         r.error.clone().map(|e| format!("{} ({e})", r.label)).unwrap_or_else(|| format!("{} (asking…)", r.label))
                     },
                     map: info.map.clone(),
+                    mode: info.mode(),
                     players: info.players,
                     max_players: info.max_players,
                     bots: info.bots,
@@ -537,6 +542,7 @@ impl ServersTab {
                 filter.is_empty()
                     || v.name.to_lowercase().contains(&filter)
                     || v.map.to_lowercase().contains(&filter)
+                    || v.mode.to_lowercase().contains(&filter)
                     || v.address.to_lowercase().contains(&filter)
             })
             .filter(|v| !(self.hide_empty && v.answered && v.players == 0))
