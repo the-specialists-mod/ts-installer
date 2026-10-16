@@ -215,6 +215,18 @@ impl TableDelegate for ServerTable {
     }
 }
 
+/// A button in this tab that starts the game. The installation view decides when it runs: it may
+/// first offer to update the Rust port.
+#[derive(Clone, Copy)]
+pub enum LaunchAction {
+    Connect(SocketAddr),
+    StartServer,
+}
+
+pub struct LaunchRequest(pub LaunchAction);
+
+impl EventEmitter<LaunchRequest> for ServersTab {}
+
 #[derive(Clone, Copy, PartialEq)]
 enum View {
     Browser,
@@ -300,7 +312,7 @@ impl ServersTab {
             }
             TableEvent::DoubleClickedRow(ix) => {
                 if let Some(addr) = table.read(cx).delegate().rows.get(*ix).map(|r| r.addr) {
-                    this.connect(addr, cx);
+                    cx.emit(LaunchRequest(LaunchAction::Connect(addr)));
                 }
             }
             _ => {}
@@ -802,7 +814,7 @@ impl ServersTab {
                                             .small()
                                             .icon(IconName::Play)
                                             .label("Connect")
-                                            .on_click(cx.listener(move |this, _, _, cx| this.connect(addr, cx))),
+                                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(LaunchRequest(LaunchAction::Connect(addr))))),
                                     )
                                     .child(
                                         Button::new("star")
@@ -900,6 +912,13 @@ impl ServersTab {
             i => BOT_MODELS.get(i - 1).map(|m| (*m).to_owned()).unwrap_or_default(),
         };
         Ok(s)
+    }
+
+    pub fn run(&mut self, action: LaunchAction, cx: &mut Context<Self>) {
+        match action {
+            LaunchAction::Connect(addr) => self.connect(addr, cx),
+            LaunchAction::StartServer => self.start_server(cx),
+        }
     }
 
     fn start_server(&mut self, cx: &mut Context<Self>) {
@@ -1103,7 +1122,7 @@ impl ServersTab {
                             .primary()
                             .icon(IconName::Play)
                             .label("Start server")
-                            .on_click(cx.listener(|this, _, _, cx| this.start_server(cx))),
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(LaunchRequest(LaunchAction::StartServer)))),
                     )
                     .when(dedicated_running, |d| {
                         d.child(Button::new("stop").outline().icon(Lucide::CircleStop).label("Stop dedicated server").on_click(

@@ -94,6 +94,8 @@ pub struct Setup {
     install_name_text: String,
     /// The name to give the installation being installed.
     pending_name: Option<String>,
+    /// The older port release being installed, to keep the installation on.
+    pending_port_tag: Option<String>,
     /// What the chosen folder already contains.
     existing: Existing,
     keep_engine: bool,
@@ -196,6 +198,7 @@ impl Setup {
             install_name,
             install_name_text,
             pending_name: None,
+            pending_port_tag: None,
             existing: Existing::default(),
             keep_engine: false,
             xash_arch: Arch::Amd64,
@@ -401,6 +404,10 @@ impl Launcher {
         }
         let s = &mut self.setup;
         s.pending_name = s.named_install().map(|_| s.install_name_text.trim().to_owned());
+        s.pending_port_tag = match &plan.libs {
+            GameLibs::RustPort(PortSource::Release { tag, .. }) => tag.clone(),
+            _ => None,
+        };
         s.steps = plan.steps();
         s.step = 0;
         s.bytes = (0, None);
@@ -447,10 +454,14 @@ impl Launcher {
             Msg::Done(Ok(installation)) => {
                 s.cancel = None;
                 let name = s.pending_name.take();
+                let port_tag = s.pending_port_tag.take();
                 let (id, saved) = self.state.update(cx, |state, cx| {
                     let id = state.store.add(installation);
-                    if let (Some(name), Some(inst)) = (name, state.store.get_mut(&id)) {
-                        inst.name = name;
+                    if let Some(inst) = state.store.get_mut(&id) {
+                        if let Some(name) = name {
+                            inst.name = name;
+                        }
+                        inst.port_tag = port_tag;
                     }
                     cx.notify();
                     (id, state.save())

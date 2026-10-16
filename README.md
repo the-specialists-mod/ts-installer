@@ -113,7 +113,12 @@ load 32-bit libraries, so they don't offer amd64. The TS 3.0 files the port repl
 The Rust port version can be picked from the port's releases (the latest by default), in the
 wizard, in the overview, or with `--port-version TAG`. Release archives are checked against the
 SHA-256 GitHub publishes for them, and the installed release is recorded in
-`ts/.tsinstaller-port.json`. **Validate** in the overview (or `ts-launcher validate`) compares the
+`ts/.tsinstaller-port.json`. An installation on "Latest release" updates the port by itself when
+the launcher opens it, or before the game starts. **Lock this version** (or picking a release in
+the version list) keeps the current release instead, after a warning that servers and players on
+newer versions may not work with it. On the TS 3.0 originals or a locked release that is no longer
+the latest, Play, Join and Start server ask every time whether to update first; updating unlocks
+the version. **Validate** in the overview (or `ts-launcher validate`) compares the
 SHA-256 of every installed port file with the release archive's copy and offers to reinstall the
 release when any differ or are missing.
 

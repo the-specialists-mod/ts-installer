@@ -238,6 +238,12 @@ fn install(args: &[String]) -> Result<()> {
     let installation = plan.run(&progress)?;
     let mut store = Store::load();
     let id = store.add(installation);
+    if let Some(inst) = store.get_mut(&id) {
+        inst.port_tag = match &plan.libs {
+            GameLibs::RustPort(PortSource::Release { tag, .. }) => tag.clone(),
+            _ => None,
+        };
+    }
     store.save()?;
     eprintln!("installed as {id}; saved {}", Store::path().display());
     Ok(())

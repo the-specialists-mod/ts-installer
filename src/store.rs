@@ -50,6 +50,10 @@ pub struct Instance {
     pub last_played: Option<u64>,
     #[serde(default)]
     pub launch: LaunchOptions,
+    /// The Rust port release this installation stays on. `None` follows the latest release:
+    /// the launcher updates the port to it on its own.
+    #[serde(default)]
+    pub port_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -101,6 +105,7 @@ impl Instance {
             created: now(),
             last_played: None,
             launch: LaunchOptions::default(),
+            port_tag: None,
         }
     }
 

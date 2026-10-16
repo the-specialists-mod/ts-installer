@@ -609,6 +609,12 @@ impl LibChoice {
         })
     }
 
+    /// The Rust port build to switch to from the originals: native 64-bit on Xash3D when there
+    /// is one, else 32-bit, as setup picks.
+    pub fn default_port(runtime: Runtime) -> Self {
+        if Self::available(runtime).contains(&Self::RustAmd64) { Self::RustAmd64 } else { Self::RustI686 }
+    }
+
     /// The choices `runtime` can switch to: Half-Life only loads 32-bit libraries.
     pub fn available(runtime: Runtime) -> Vec<Self> {
         match runtime {

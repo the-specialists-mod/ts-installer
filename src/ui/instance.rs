@@ -16,7 +16,7 @@ use gpui_kit::component::{ActiveTheme, IconName, IndexPath, Sizable, h_flex, v_f
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use ts_launcher::install::{Installation, LibChoice, PortCheck, Runtime, port_manifest, switch_libs, ts_libs, validate_port};
+use ts_launcher::install::{Installation, LibChoice, PortCheck, Runtime, TsLibs, port_manifest, switch_libs, ts_libs, validate_port};
 use ts_launcher::progress::{Event, Progress};
 use ts_launcher::store::Instance;
 use ts_launcher::tsfiles::{self, TsCheck};
@@ -25,7 +25,7 @@ use ts_launcher::{hdpack, server_host};
 use super::controls::ControlsTab;
 use super::gameconfig::GameConfigTab;
 use super::models::ModelsTab;
-use super::servers::ServersTab;
+use super::servers::{LaunchAction, LaunchRequest, ServersTab};
 use super::{AppState, detail_row, human_bytes, human_time, section, theme};
 
 pub enum InstanceEvent {
@@ -127,6 +127,32 @@ pub struct InstanceView {
     /// The local server's map and bot count.
     map: Entity<SelectState<Vec<String>>>,
     bots: Entity<InputState>,
+    /// The port's latest release, once the releases are fetched.
+    latest_tag: Option<String>,
+    /// A launch waiting for the answer to "update the Rust port first?".
+    ask_update: Option<Pending>,
+    /// A launch to retry once the running job succeeds.
+    after_job: Option<Pending>,
+    /// The release to lock the port to, once its warning is accepted.
+    confirm_lock: Option<String>,
+}
+
+/// A button that starts the game, held while the Rust port is offered or updated.
+#[derive(Clone, Copy)]
+enum Pending {
+    Play,
+    Servers(LaunchAction),
+}
+
+impl Pending {
+    /// The button's verb, capitalised and not.
+    fn verb(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Play => ("Play", "play"),
+            Self::Servers(LaunchAction::Connect(_)) => ("Join", "join"),
+            Self::Servers(LaunchAction::StartServer) => ("Start", "start"),
+        }
+    }
 }
 
 /// Most bots the local server takes (TS servers hold 32 players, one of them you).
@@ -198,15 +224,22 @@ impl InstanceView {
         })
         .detach();
 
-        let installed_tag = port_manifest(&inst.ts_dir()).map(|m| m.tag);
-        let version_tags: Vec<String> = installed_tag.iter().cloned().collect();
+        let version_tags: Vec<String> = inst.port_tag.iter().cloned().collect();
         let labels = version_labels(&version_tags);
         let versions = cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(version_tags.len())), window, cx));
         cx.subscribe(&versions, |this, state, e: &SelectEvent<Vec<SharedString>>, cx| {
             let SelectEvent::Confirm(Some(_)) = e else { return };
             let ix = state.read(cx).selected_index(cx).map(|i| i.row).unwrap_or(0);
-            let tag = ix.checked_sub(1).and_then(|i| this.version_tags.get(i)).cloned();
-            this.install_version(tag, false, cx);
+            match ix.checked_sub(1).and_then(|i| this.version_tags.get(i)).cloned() {
+                // A release of its own locks the version: warn first.
+                Some(tag) => {
+                    if this.instance(cx).is_some_and(|i| i.port_tag.as_ref() != Some(&tag)) {
+                        this.confirm_lock = Some(tag);
+                        cx.notify();
+                    }
+                }
+                None => this.unlock(cx),
+            }
         })
         .detach();
         cx.spawn(async move |this, cx| {
@@ -214,7 +247,9 @@ impl InstanceView {
             match releases {
                 Ok(r) => {
                     let _ = this.update(cx, |this, cx| {
+                        this.latest_tag = r.iter().find(|r| !r.prerelease).map(|r| r.tag.clone());
                         this.fetched_versions = Some(r.into_iter().map(|r| r.tag).collect());
+                        this.auto_update(cx);
                         cx.notify();
                     });
                 }
@@ -271,6 +306,10 @@ impl InstanceView {
             confirm_reset: false,
             map,
             bots,
+            latest_tag: None,
+            ask_update: None,
+            after_job: None,
+            confirm_lock: None,
         }
     }
 
@@ -316,18 +355,12 @@ impl InstanceView {
         });
     }
 
-    /// The release picked in the version select: `None` for the latest.
-    fn selected_tag(&self, cx: &App) -> Option<String> {
-        let ix = self.versions.read(cx).selected_index(cx).map(|i| i.row).unwrap_or(0);
-        ix.checked_sub(1).and_then(|i| self.version_tags.get(i)).cloned()
-    }
-
     fn switch_libs(&mut self, choice: LibChoice, cx: &mut Context<Self>) {
         let Some(inst) = self.instance(cx) else { return };
         if LibChoice::current(&inst.install) == Some(choice) {
             return;
         }
-        let tag = self.selected_tag(cx);
+        let tag = inst.port_tag.clone().or_else(|| self.latest_tag.clone());
         self.start_job(format!("Switching to {}", choice.label()), cx, move |progress| {
             let install = switch_libs(&inst.install, choice, tag.as_deref(), progress)?;
             let message = format!("Switched to {} on {}", choice.label(), install.runtime.label());
@@ -340,6 +373,7 @@ impl InstanceView {
     fn install_version(&mut self, tag: Option<String>, force: bool, cx: &mut Context<Self>) {
         let Some(inst) = self.instance(cx) else { return };
         let Some(choice) = LibChoice::current(&inst.install).filter(|c| *c != LibChoice::Original) else { return };
+        let tag = tag.or_else(|| self.latest_tag.clone());
         if !force && tag.is_some() && tag == port_manifest(&inst.ts_dir()).map(|m| m.tag) {
             return;
         }
@@ -348,6 +382,108 @@ impl InstanceView {
             let install = switch_libs(&inst.install, choice, tag.as_deref(), progress)?;
             let installed = port_manifest(&install.root.join("ts")).map(|m| m.tag).unwrap_or(name);
             Ok(JobDone::Installed { install, message: format!("Installed Rust port {installed} ({})", choice.label()) })
+        });
+    }
+
+    /// Keeps the port on `tag` (installing it when another release is there) instead of updating it.
+    fn lock(&mut self, tag: String, cx: &mut Context<Self>) {
+        let pin = tag.clone();
+        self.update_instance(cx, |i| i.port_tag = Some(pin));
+        self.resync_libs = true;
+        self.install_version(Some(tag), false, cx);
+    }
+
+    /// Follows the latest port release again, updating to it now.
+    fn unlock(&mut self, cx: &mut Context<Self>) {
+        self.update_instance(cx, |i| i.port_tag = None);
+        self.resync_libs = true;
+        self.install_version(None, false, cx);
+    }
+
+    /// Whether the installation follows the latest port release but holds an older one.
+    fn behind_latest(&self, inst: &Instance) -> bool {
+        inst.port_tag.is_none()
+            && ts_libs(&inst.ts_dir()) == Some(TsLibs::RustPort)
+            && self.latest_tag.as_ref().is_some_and(|latest| port_manifest(&inst.ts_dir()).is_some_and(|m| m.tag != *latest))
+    }
+
+    /// Updates the port to the latest release when the installation follows it. A port installed
+    /// from a folder or URL has no release to compare, so it stays. Returns whether it started.
+    fn auto_update(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(inst) = self.instance(cx) else { return false };
+        if self.switching.is_some() || !self.behind_latest(&inst) {
+            return false;
+        }
+        self.install_version(self.latest_tag.clone(), false, cx);
+        self.switching.is_some()
+    }
+
+    /// Why starting the game should offer the latest port first: the installation runs the
+    /// classic TS 3.0 libraries, or stays on an older release.
+    fn update_offer(&self, inst: &Instance) -> Option<String> {
+        let latest = self.latest_tag.as_ref()?;
+        match ts_libs(&inst.ts_dir())? {
+            TsLibs::Original => Some(format!("This installation runs the classic TS 3.0 libraries. Rust port {latest} is out.")),
+            TsLibs::RustPort => {
+                let tag = port_manifest(&inst.ts_dir())?.tag;
+                let pos = |t: &str| self.version_tags.iter().position(|x| x == t);
+                let older = match (pos(&tag), pos(latest)) {
+                    (Some(a), Some(b)) => a > b,
+                    _ => tag != *latest,
+                };
+                let has = if inst.port_tag.is_some() { "is locked to" } else { "has" };
+                older.then(|| format!("This installation {has} Rust port {tag}; the latest release is {latest}."))
+            }
+        }
+    }
+
+    /// Starts the game for `pending`, first updating a port that follows the latest release, or
+    /// asking whether to update the classic libraries or an older release.
+    fn request_launch(&mut self, pending: Pending, cx: &mut Context<Self>) {
+        if let Some(s) = &self.switching {
+            self.status = Some(Ok(format!("{} once \"{}\" finishes", pending.verb().0, s.title)));
+            self.after_job = Some(pending);
+            cx.notify();
+            return;
+        }
+        let Some(inst) = self.instance(cx) else { return };
+        if self.update_offer(&inst).is_none() {
+            return self.run_launch(pending, cx);
+        }
+        if self.behind_latest(&inst) && self.auto_update(cx) {
+            self.after_job = Some(pending);
+            return;
+        }
+        self.ask_update = Some(pending);
+        cx.notify();
+    }
+
+    fn run_launch(&mut self, pending: Pending, cx: &mut Context<Self>) {
+        match pending {
+            Pending::Play => self.play(cx),
+            Pending::Servers(action) => {
+                if let Some(servers) = &self.servers {
+                    servers.update(cx, |s, cx| s.run(action, cx));
+                }
+            }
+        }
+    }
+
+    /// The answer "update": installs the latest port (over the classic libraries, the build setup
+    /// picks), follows the latest release from now on, then starts the game.
+    fn update_then_launch(&mut self, pending: Pending, cx: &mut Context<Self>) {
+        let Some(inst) = self.instance(cx) else { return };
+        let Some(latest) = self.latest_tag.clone() else { return };
+        let choice = match LibChoice::current(&inst.install) {
+            Some(LibChoice::Original) | None => LibChoice::default_port(inst.install.runtime),
+            Some(c) => c,
+        };
+        self.update_instance(cx, |i| i.port_tag = None);
+        self.resync_libs = true;
+        self.after_job = Some(pending);
+        self.start_job(format!("Updating to Rust port {latest}"), cx, move |progress| {
+            let install = switch_libs(&inst.install, choice, Some(&latest), progress)?;
+            Ok(JobDone::Installed { install, message: format!("Updated to Rust port {latest} ({})", choice.label()) })
         });
     }
 
@@ -410,6 +546,8 @@ impl InstanceView {
             SwitchMsg::Event(Event::Log(_)) => {}
             SwitchMsg::Done(result) => {
                 self.switching = None;
+                // Retry a launch that waited for this job; after a failure, the error stands.
+                let after = self.after_job.take().filter(|_| result.is_ok());
                 match result {
                     Ok(JobDone::Installed { install, message }) => {
                         self.update_instance(cx, |i| i.install = install);
@@ -463,6 +601,9 @@ impl InstanceView {
                     Err(e) => self.status = Some(Err(e)),
                 }
                 self.resync_libs = true;
+                if let Some(pending) = after {
+                    self.request_launch(pending, cx);
+                }
             }
         }
         cx.notify();
@@ -559,6 +700,21 @@ impl InstanceView {
                                             .child(div().w(px(260.)).child(
                                                 Select::new(&self.versions).id("port-version").small().disabled(self.switching.is_some()),
                                             ))
+                                            .child(
+                                                Checkbox::new("lock-port")
+                                                    .label("Lock this version")
+                                                    .checked(inst.port_tag.is_some())
+                                                    // Only a release can be locked to.
+                                                    .disabled(busy || (inst.port_tag.is_none() && installed.is_none()))
+                                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                                        if !*checked {
+                                                            return this.unlock(cx);
+                                                        }
+                                                        let Some(inst) = this.instance(cx) else { return };
+                                                        this.confirm_lock = port_manifest(&inst.ts_dir()).map(|m| m.tag);
+                                                        cx.notify();
+                                                    })),
+                                            )
                                             .child(
                                                 Button::new("validate-port")
                                                     .outline()
@@ -763,7 +919,7 @@ impl InstanceView {
                                     .w_full()
                                     .icon(IconName::Play)
                                     .label("Play")
-                                    .on_click(cx.listener(|this, _, _, cx| this.play(cx))),
+                                    .on_click(cx.listener(|this, _, _, cx| this.request_launch(Pending::Play, cx))),
                             )
                             .when_some(self.status.clone(), |d, s| {
                                 d.child(match s {
@@ -850,14 +1006,13 @@ impl Render for InstanceView {
         if std::mem::take(&mut self.resync_libs) {
             let current = LibChoice::current(&inst.install).and_then(|c| self.lib_choices.iter().position(|x| *x == c));
             self.libs.update(cx, |s, cx| s.set_selected_index(current.map(IndexPath::new), window, cx));
-            // Show the installed release, or "Latest release" without one.
-            let installed = port_manifest(&inst.ts_dir()).map(|m| m.tag);
-            if let Some(t) = &installed
+            // Show the release the installation stays on, or "Latest release" when it follows it.
+            if let Some(t) = &inst.port_tag
                 && !self.version_tags.contains(t)
             {
                 self.version_tags.push(t.clone());
             }
-            let ix = installed.and_then(|t| self.version_tags.iter().position(|x| *x == t)).map_or(0, |i| i + 1);
+            let ix = inst.port_tag.as_ref().and_then(|t| self.version_tags.iter().position(|x| x == t)).map_or(0, |i| i + 1);
             let labels = version_labels(&self.version_tags);
             self.versions.update(cx, |s, cx| {
                 s.set_items(labels, window, cx);
@@ -868,9 +1023,7 @@ impl Render for InstanceView {
         let (state, id) = (self.state.clone(), self.id.clone());
         let body = match self.tab {
             TabKind::Overview => self.render_overview(&inst, cx),
-            TabKind::Servers => {
-                self.servers.get_or_insert_with(|| cx.new(|cx| ServersTab::new(state, id, window, cx))).clone().into_any_element()
-            }
+            TabKind::Servers => self.servers_tab(window, cx).into_any_element(),
             TabKind::Models => {
                 self.models.get_or_insert_with(|| cx.new(|cx| ModelsTab::new(state, id, window, cx))).clone().into_any_element()
             }
@@ -932,8 +1085,118 @@ impl Render for InstanceView {
             )
             .child(metal_bar(selected, cx))
             .child(self.state.read(cx).update.clone())
-            .child(div().flex_1().min_h_0().child(body))
+            .child(div().flex_1().min_h_0().relative().child(body).when_some(self.render_update_prompt(&inst, cx), |d, p| d.child(p)))
             .into_any_element()
+    }
+}
+
+impl InstanceView {
+    fn servers_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ServersTab> {
+        if let Some(tab) = &self.servers {
+            return tab.clone();
+        }
+        let (state, id) = (self.state.clone(), self.id.clone());
+        let tab = cx.new(|cx| ServersTab::new(state, id, window, cx));
+        cx.subscribe(&tab, |this, _, LaunchRequest(action), cx| this.request_launch(Pending::Servers(*action), cx)).detach();
+        self.servers = Some(tab.clone());
+        tab
+    }
+
+    /// Over every tab: the warning before locking the port's version, the question whether to
+    /// update the Rust port before starting the game, then that update's progress.
+    fn render_update_prompt(&self, inst: &Instance, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let panel = |title: &str, cx: &mut Context<Self>| section(title, "", cx).w(px(520.)).shadow_lg();
+        let body = if let Some(tag) = self.confirm_lock.clone() {
+            let newer = self.latest_tag.as_ref().filter(|l| **l != tag).map(|l| format!(" {l} is already out.")).unwrap_or_default();
+            panel(&format!("Lock Rust port {tag}?"), cx)
+                .child(div().text_sm().child(format!("The launcher stops updating this installation and keeps Rust port {tag}.{newer}")))
+                .child(div().text_sm().text_color(cx.theme().warning).child(
+                    "Servers and players on newer versions may not work with a locked version: joining can fail, \
+                     and games can desync or miss fixes and features. Untick \"Lock this version\" to follow the \
+                     latest release again.",
+                ))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .pt_2()
+                        .child(Button::new("lock-confirm").danger().icon(Lucide::Lock).label(format!("Lock {tag}")).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.confirm_lock = None;
+                                this.lock(tag.clone(), cx);
+                            },
+                        )))
+                        .child(Button::new("lock-cancel").ghost().label("Cancel").on_click(cx.listener(|this, _, _, cx| {
+                            this.confirm_lock = None;
+                            // Put the version select back.
+                            this.resync_libs = true;
+                            cx.notify();
+                        }))),
+                )
+        } else if let Some(pending) = self.ask_update {
+            let (verb, verb_lower) = pending.verb();
+            let latest = self.latest_tag.clone().unwrap_or_default();
+            let reason = self.update_offer(inst).unwrap_or_default();
+            panel("Update the Rust port?", cx)
+                .child(div().text_sm().child(reason))
+                .child(div().text_sm().text_color(cx.theme().muted_foreground).child(format!(
+                    "Updating installs {latest} and keeps this installation on the latest release from now on (unlocking its version)."
+                )))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .pt_2()
+                        .child(
+                            Button::new("update-launch")
+                                .primary()
+                                .icon(IconName::ArrowDown)
+                                .label(format!("Update and {verb_lower}"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.ask_update = None;
+                                    this.update_then_launch(pending, cx);
+                                })),
+                        )
+                        .child(Button::new("launch-anyway").outline().label(format!("{verb} without updating")).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.ask_update = None;
+                                this.run_launch(pending, cx);
+                            },
+                        )))
+                        .child(Button::new("update-cancel").ghost().label("Cancel").on_click(cx.listener(|this, _, _, cx| {
+                            this.ask_update = None;
+                            cx.notify();
+                        }))),
+                )
+        } else if let (Some(pending), Some(s)) = (self.after_job, &self.switching) {
+            let percent = s.bytes.1.filter(|t| *t > 0).map(|t| s.bytes.0 as f32 / t as f32 * 100.);
+            panel("Update the Rust port?", cx)
+                .child(div().text_sm().child(format!("{}; the game starts when it's done.", s.title)))
+                .child(ProgressBar::new("launch-update-progress").loading(percent.is_none()).value(percent.unwrap_or(0.)))
+                .child(h_flex().pt_2().child(
+                    Button::new("launch-update-cancel").ghost().small().label(format!("Don't {} after", pending.verb().1)).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.after_job = None;
+                            this.status = None;
+                            cx.notify();
+                        }),
+                    ),
+                ))
+        } else {
+            return None;
+        };
+        Some(
+            div()
+                .id("update-prompt")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(hsla(0., 0., 0., 0.6))
+                // Keep clicks off the tab underneath.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(body)
+                .into_any_element(),
+        )
     }
 }
 
